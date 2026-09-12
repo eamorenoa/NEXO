@@ -1,0 +1,2 @@
+import { useCallback, useEffect, useState } from 'react'; import { MapPlace } from '../models/MapPlace'; import { MapService } from '../services/MapService';
+export function useMapViewModel(){const [places,setPlaces]=useState<MapPlace[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState('');const load=useCallback(async()=>{setLoading(true);try{setPlaces(await MapService.places());}catch(e:any){setError(e.message);}finally{setLoading(false);}},[]);useEffect(()=>{load();},[load]);return{places,loading,error,reload:load};}

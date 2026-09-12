@@ -1,0 +1,1 @@
+import { ReactNode } from 'react'; import { View, StyleSheet } from 'react-native'; import { colors } from '../shared/theme'; export function Card({children}:{children:ReactNode}){return <View style={s.card}>{children}</View>} const s=StyleSheet.create({card:{backgroundColor:'#fff',borderWidth:1,borderColor:colors.border,borderRadius:18,padding:16,marginBottom:12}});
