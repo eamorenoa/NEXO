@@ -1,1 +1,124 @@
-import { useEffect } from 'react'; import { StyleSheet, Text, View } from 'react-native'; import { colors } from '../shared/theme'; export function SplashView({onFinish}:{onFinish:()=>void}){useEffect(()=>{const t=setTimeout(onFinish,1200);return()=>clearTimeout(t)},[onFinish]);return <View style={s.c}><View style={s.mark}><Text style={s.n}>N</Text></View><Text style={s.logo}>NEXO</Text><Text style={s.tag}>Tu barrio, conectado.</Text></View>} const s=StyleSheet.create({c:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#fff'},mark:{width:80,height:80,borderRadius:26,backgroundColor:colors.primary,alignItems:'center',justifyContent:'center'},n:{color:'#fff',fontSize:46,fontWeight:'900'},logo:{color:colors.primary,fontSize:42,fontWeight:'900',letterSpacing:3,marginTop:15},tag:{color:colors.text,fontWeight:'700',marginTop:2}});
+import { useEffect } from 'react';
+import {
+  Image,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+interface SplashViewProps {
+  onFinish: () => void;
+}
+
+export function SplashView({
+  onFinish,
+}: SplashViewProps) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onFinish();
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [onFinish]);
+
+  return (
+    <View style={styles.container}>
+
+      {/* Logo principal */}
+      <Image
+        source={require('../../assets/images/splash-icon.png')}
+        style={styles.logo}
+        resizeMode="contain"
+      />
+
+      {/* Nombre de la aplicación */}
+      <Text style={styles.title}>
+        ExtraTime
+        <Text style={styles.titleAccent}>
+          Smart
+        </Text>
+      </Text>
+
+      {/* Descripción */}
+      <Text style={styles.subtitle}>
+        Workforce Intelligence Platform
+      </Text>
+
+      {/* Indicador de carga */}
+      <View style={styles.loadingContainer}>
+
+        <View style={styles.loadingTrack}>
+          <View style={styles.loadingProgress} />
+        </View>
+
+        <Text style={styles.loadingText}>
+          Inicializando plataforma...
+        </Text>
+
+      </View>
+
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0B1F33',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 30,
+  },
+
+  logo: {
+    width: 230,
+    height: 230,
+    marginBottom: 18,
+  },
+
+  title: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+
+  titleAccent: {
+    color: '#00A86B',
+  },
+
+  subtitle: {
+    color: '#DCE6EF',
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 7,
+    textAlign: 'center',
+  },
+
+  loadingContainer: {
+    width: '78%',
+    alignItems: 'center',
+    marginTop: 45,
+  },
+
+  loadingTrack: {
+    width: '100%',
+    height: 5,
+    borderRadius: 5,
+    backgroundColor: '#29445D',
+    overflow: 'hidden',
+  },
+
+  loadingProgress: {
+    width: '65%',
+    height: '100%',
+    backgroundColor: '#00A86B',
+    borderRadius: 5,
+  },
+
+  loadingText: {
+    color: '#9FB3C5',
+    fontSize: 11,
+    marginTop: 10,
+  },
+});

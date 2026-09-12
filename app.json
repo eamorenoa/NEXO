@@ -7,12 +7,42 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+
     "plugins": [
-      ["expo-splash-screen", {"image":"./assets/images/splash-icon.png","resizeMode":"contain","backgroundColor":"#6D28D9"}],
-      ["expo-location", {"locationAlwaysAndWhenInUsePermission":"NEXO usa tu ubicación para mostrar ayudas y servicios cercanos."}]
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0B1F33"
+        }
+      ],
+
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "NEXO usa tu ubicación para mostrar ayudas y servicios cercanos."
+        }
+      ]
     ],
-    "ios": {"supportsTablet":true,"infoPlist":{"NSLocationWhenInUseUsageDescription":"NEXO usa tu ubicación para mostrar recursos cercanos."}},
-    "android": {"adaptiveIcon":{"foregroundImage":"./assets/adaptive-icon.png","backgroundColor":"#ffffff"},"edgeToEdgeEnabled":true},
-    "web":{"favicon":"./assets/favicon.png"}
+
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "NEXO usa tu ubicación para mostrar recursos cercanos."
+      }
+    },
+
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true
+    },
+
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
   }
 }
