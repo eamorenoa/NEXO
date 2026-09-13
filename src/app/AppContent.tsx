@@ -15,7 +15,7 @@ import { SplashView } from '../views/SplashView';
 import { HomeView } from '../views/HomeView';
 import { NeedsView } from '../views/NeedsView';
 import { CommunityView } from '../views/CommunityView';
-import { MapScreen } from '../views/MapView';
+import { MapView } from '../views/MapView';
 import { ProfileView } from '../views/ProfileView';
 import { AIView } from '../views/AIView';
 import { EmergencyView } from '../views/EmergencyView';
@@ -143,7 +143,7 @@ export function AppContent() {
     ),
 
     map: (
-      <MapScreen />
+      <MapView />
     ),
 
     profile: (
