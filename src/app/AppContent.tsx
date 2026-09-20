@@ -2,11 +2,15 @@ import { useCallback, useState } from 'react';
 
 import {
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+} from 'react-native-safe-area-context';
 
 import { User } from '../models/User';
 
@@ -97,14 +101,16 @@ export function AppContent() {
 
   if (screen === 'ai') {
     return (
-      <SafeAreaView style={s.root}>
-        <AIView
-          token={token}
-          onBack={() =>
-            setScreen('home')
-          }
-        />
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={s.root}>
+          <AIView
+            token={token}
+            onBack={() =>
+              setScreen('home')
+            }
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
@@ -155,63 +161,65 @@ export function AppContent() {
   };
 
   return (
-    <SafeAreaView style={s.root}>
+    <SafeAreaProvider>
+      <SafeAreaView style={s.root}>
 
-      <View style={s.body}>
-        {content[screen] ||
-          content.home}
-      </View>
+        <View style={s.body}>
+          {content[screen] ||
+            content.home}
+        </View>
 
-      {/* BARRA DE NAVEGACIÓN */}
+        {/* BARRA DE NAVEGACIÓN */}
 
-      <View style={s.nav}>
-        {tabs.map(
-          ([key, icon, label]) => (
-            <Pressable
-              key={key}
-              onPress={() =>
-                setScreen(key)
-              }
-              style={s.tab}
-            >
-              <Text
-                style={[
-                  s.icon,
-                  screen === key &&
-                    s.active,
-                ]}
+        <View style={s.nav}>
+          {tabs.map(
+            ([key, icon, label]) => (
+              <Pressable
+                key={key}
+                onPress={() =>
+                  setScreen(key)
+                }
+                style={s.tab}
               >
-                {icon}
-              </Text>
+                <Text
+                  style={[
+                    s.icon,
+                    screen === key &&
+                      s.active,
+                  ]}
+                >
+                  {icon}
+                </Text>
 
-              <Text
-                style={[
-                  s.label,
-                  screen === key &&
-                    s.active,
-                ]}
-              >
-                {label}
-              </Text>
-            </Pressable>
-          )
-        )}
-      </View>
+                <Text
+                  style={[
+                    s.label,
+                    screen === key &&
+                      s.active,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            )
+          )}
+        </View>
 
-      {/* BOTÓN + */}
+        {/* BOTÓN + */}
 
-      <Pressable
-        onPress={() =>
-          setScreen('needs')
-        }
-        style={s.fab}
-      >
-        <Text style={s.plus}>
-          +
-        </Text>
-      </Pressable>
+        <Pressable
+          onPress={() =>
+            setScreen('needs')
+          }
+          style={s.fab}
+        >
+          <Text style={s.plus}>
+            +
+          </Text>
+        </Pressable>
 
-    </SafeAreaView>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
