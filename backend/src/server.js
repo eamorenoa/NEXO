@@ -1,18 +1,1195 @@
 import 'dotenv/config';
-import express from 'express'; import cors from 'cors'; import bcrypt from 'bcryptjs'; import jwt from 'jsonwebtoken'; import pg from 'pg';
-import { classifyNeed } from './services/classifyNeed.js'; import { askAI, classifyWithAI } from './services/ai.js';
-const {Pool}=pg; const pool=new Pool({connectionString:process.env.DATABASE_URL}); const app=express(); const PORT=process.env.PORT||3000; const JWT_SECRET=process.env.JWT_SECRET||'dev-secret-change-me';
-app.use(cors()); app.use(express.json({limit:'100kb'}));
-const auth=(req,res,next)=>{try{const token=req.headers.authorization?.replace('Bearer ','');if(!token)return res.status(401).json({message:'Token requerido'});req.user=jwt.verify(token,JWT_SECRET);next();}catch{return res.status(401).json({message:'Sesión no válida'});}};
-app.get('/api/health',async(_req,res)=>{try{await pool.query('SELECT 1');res.json({ok:true,service:'NEXO API',database:'up',ai:Boolean(process.env.OPENAI_API_KEY)});}catch{res.status(503).json({ok:false,service:'NEXO API',database:'down'});}});
-app.post('/api/auth/register',async(req,res,next)=>{try{const name=String(req.body.name||'').trim(),email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');if(name.length<3||!email.includes('@')||password.length<6)return res.status(400).json({message:'Datos de registro inválidos'});const hash=await bcrypt.hash(password,12);const {rows}=await pool.query('INSERT INTO users(name,email,password_hash) VALUES($1,$2,$3) RETURNING id,name,email,role',[name,email,hash]);const user=rows[0];const payload={id:String(user.id),name:user.name,email:user.email,role:user.role};res.status(201).json({token:jwt.sign(payload,JWT_SECRET,{expiresIn:'8h'}),user:payload});}catch(e){if(e.code==='23505')return res.status(409).json({message:'El correo ya está registrado'});next(e);}});
-app.post('/api/auth/login',async(req,res,next)=>{try{const email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');const {rows}=await pool.query('SELECT id,name,email,password_hash,role FROM users WHERE LOWER(email)=LOWER($1) AND active=true LIMIT 1',[email]);const user=rows[0];if(!user||!(await bcrypt.compare(password,user.password_hash)))return res.status(401).json({message:'Credenciales incorrectas'});const payload={id:String(user.id),name:user.name,email:user.email,role:user.role};res.json({token:jwt.sign(payload,JWT_SECRET,{expiresIn:'8h'}),user:payload});}catch(e){next(e);}});
-app.get('/api/needs',auth,async(req,res,next)=>{try{const {rows}=await pool.query(`SELECT n.id,n.description,n.category,n.status,n.ai_category,n.ai_confidence,n.created_at,u.name AS author FROM needs n JOIN users u ON u.id=n.user_id ORDER BY n.created_at DESC LIMIT 50`);res.json(rows);}catch(e){next(e);}});
-app.post('/api/needs',auth,async(req,res,next)=>{try{const description=String(req.body.description||'').trim();if(description.length<5)return res.status(400).json({message:'Describe mejor la necesidad'});let ai=classifyNeed(description);try{ai=await classifyWithAI(description);}catch{}const category=String(req.body.category||ai.category);const {rows}=await pool.query(`INSERT INTO needs(user_id,description,category,ai_category,ai_confidence) VALUES($1,$2,$3,$4,$5) RETURNING id,description,category,status,ai_category,ai_confidence,created_at`,[req.user.id,description,category,ai.category,ai.confidence]);res.status(201).json(rows[0]);}catch(e){next(e);}});
-app.get('/api/community',auth,async(req,res,next)=>{try{const {rows}=await pool.query(`SELECT p.id,p.body,p.created_at,u.name AS author FROM community_posts p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 50`);res.json(rows);}catch(e){next(e);}});
-app.post('/api/community',auth,async(req,res,next)=>{try{const body=String(req.body.body||'').trim();if(body.length<3)return res.status(400).json({message:'La publicación es demasiado corta'});const {rows}=await pool.query('INSERT INTO community_posts(user_id,body) VALUES($1,$2) RETURNING id,body,created_at',[req.user.id,body]);res.status(201).json(rows[0]);}catch(e){next(e);}});
-app.get('/api/map/places',async(_req,res,next)=>{try{const {rows}=await pool.query('SELECT id,name,type,latitude,longitude,description FROM map_places ORDER BY id');res.json(rows.map(p=>({...p,latitude:Number(p.latitude),longitude:Number(p.longitude)})));}catch(e){next(e);}});
-app.post('/api/ai/assistant',auth,async(req,res,next)=>{try{const message=String(req.body.message||'').trim();if(message.length<3)return res.status(400).json({message:'Escribe una consulta'});res.json(await askAI(message));}catch(e){next(e);}});
-app.get('/api/stats',auth,async(_req,res,next)=>{try{const [needs,posts,users,cats]=await Promise.all([pool.query('SELECT COUNT(*)::int total FROM needs'),pool.query('SELECT COUNT(*)::int total FROM community_posts'),pool.query('SELECT COUNT(*)::int total FROM users WHERE active=true'),pool.query('SELECT category,COUNT(*)::int total FROM needs GROUP BY category ORDER BY total DESC')]);res.json({needs:needs.rows[0].total,posts:posts.rows[0].total,users:users.rows[0].total,categories:cats.rows});}catch(e){next(e);}});
-app.use((err,_req,res,_next)=>{console.error(err);res.status(500).json({message:'Error interno del servidor'});});
-app.listen(PORT,()=>console.log(`NEXO API en http://localhost:${PORT}`));
+
+import express from 'express';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import pg from 'pg';
+import crypto from 'node:crypto';
+
+import { classifyNeed } from './services/classifyNeed.js';
+import { askAI, classifyWithAI } from './services/ai.js';
+
+const { Pool } = pg;
+
+const app = express();
+
+const PORT = Number(process.env.PORT || 3000);
+const DATABASE_URL = process.env.DATABASE_URL;
+const JWT_SECRET = process.env.JWT_SECRET;
+
+const ACCESS_TOKEN_EXPIRES_IN = '15m';
+const REFRESH_TOKEN_DAYS = 30;
+
+if (!DATABASE_URL) {
+    console.error('ERROR: DATABASE_URL no está configurada.');
+    process.exit(1);
+}
+
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    console.error(
+        'ERROR: JWT_SECRET debe estar configurado y tener al menos 32 caracteres.'
+    );
+    process.exit(1);
+}
+
+const pool = new Pool({
+    connectionString: DATABASE_URL,
+});
+
+/*
+|--------------------------------------------------------------------------
+| CONFIGURACIÓN GENERAL
+|--------------------------------------------------------------------------
+*/
+
+app.use(
+    cors({
+        origin: true,
+        credentials: true,
+    })
+);
+
+app.use(
+    express.json({
+        limit: '100kb',
+    })
+);
+
+/*
+|--------------------------------------------------------------------------
+| FUNCIONES DE TOKENS
+|--------------------------------------------------------------------------
+*/
+
+function createAccessToken(user) {
+    return jwt.sign(
+        {
+            id: String(user.id),
+            name: user.name,
+            email: user.email,
+            role: user.role,
+        },
+        JWT_SECRET,
+        {
+            expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+            issuer: 'nexo-api',
+            audience: 'nexo-mobile',
+        }
+    );
+}
+
+function generateRefreshToken() {
+    return crypto.randomBytes(64).toString('base64url');
+}
+
+function hashRefreshToken(token) {
+    return crypto
+        .createHash('sha256')
+        .update(token)
+        .digest('hex');
+}
+
+function getRefreshExpirationDate() {
+    const expiresAt = new Date();
+
+    expiresAt.setDate(
+        expiresAt.getDate() + REFRESH_TOKEN_DAYS
+    );
+
+    return expiresAt;
+}
+
+async function createRefreshSession(userId, deviceName = null) {
+    const refreshToken = generateRefreshToken();
+    const tokenHash = hashRefreshToken(refreshToken);
+    const expiresAt = getRefreshExpirationDate();
+
+    await pool.query(
+        `
+        INSERT INTO refresh_tokens (
+            user_id,
+            token_hash,
+            device_name,
+            expires_at
+        )
+        VALUES ($1, $2, $3, $4)
+        `,
+        [
+            userId,
+            tokenHash,
+            deviceName,
+            expiresAt,
+        ]
+    );
+
+    return refreshToken;
+}
+
+function normalizeBearerToken(header) {
+    if (!header) {
+        return null;
+    }
+
+    if (!header.startsWith('Bearer ')) {
+        return null;
+    }
+
+    return header.substring(7).trim();
+}
+
+/*
+|--------------------------------------------------------------------------
+| AUTENTICACIÓN
+|--------------------------------------------------------------------------
+*/
+
+const auth = async (req, res, next) => {
+    try {
+        const token = normalizeBearerToken(
+            req.headers.authorization
+        );
+
+        if (!token) {
+            return res.status(401).json({
+                message: 'Token requerido',
+                code: 'TOKEN_REQUIRED',
+            });
+        }
+
+        const decoded = jwt.verify(
+            token,
+            JWT_SECRET,
+            {
+                issuer: 'nexo-api',
+                audience: 'nexo-mobile',
+            }
+        );
+
+        const userId = Number(decoded.id);
+
+        if (!Number.isInteger(userId)) {
+            return res.status(401).json({
+                message: 'Token no válido',
+                code: 'INVALID_TOKEN',
+            });
+        }
+
+        const { rows } = await pool.query(
+            `
+            SELECT
+                id,
+                name,
+                email,
+                role,
+                active
+            FROM users
+            WHERE id = $1
+            LIMIT 1
+            `,
+            [userId]
+        );
+
+        const user = rows[0];
+
+        if (!user) {
+            return res.status(401).json({
+                message: 'Usuario no encontrado',
+                code: 'USER_NOT_FOUND',
+            });
+        }
+
+        if (!user.active) {
+            return res.status(403).json({
+                message: 'La cuenta está desactivada',
+                code: 'USER_INACTIVE',
+            });
+        }
+
+        req.user = {
+            id: String(user.id),
+            name: user.name,
+            email: user.email,
+            role: user.role,
+        };
+
+        next();
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                message: 'El token ha expirado',
+                code: 'TOKEN_EXPIRED',
+            });
+        }
+
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                message: 'Sesión no válida',
+                code: 'INVALID_TOKEN',
+            });
+        }
+
+        next(error);
+    }
+};
+
+/*
+|--------------------------------------------------------------------------
+| AUTORIZACIÓN POR PERMISOS
+|--------------------------------------------------------------------------
+*/
+
+function requirePermission(permissionCode) {
+    return async (req, res, next) => {
+        try {
+            if (!req.user) {
+                return res.status(401).json({
+                    message: 'Autenticación requerida',
+                    code: 'AUTH_REQUIRED',
+                });
+            }
+
+            const { rows } = await pool.query(
+                `
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM role_permissions rp
+                    INNER JOIN roles r
+                        ON r.id = rp.role_id
+                    INNER JOIN permissions p
+                        ON p.id = rp.permission_id
+                    WHERE r.name = $1
+                      AND p.code = $2
+                ) AS allowed
+                `,
+                [
+                    req.user.role,
+                    permissionCode,
+                ]
+            );
+
+            if (!rows[0]?.allowed) {
+                return res.status(403).json({
+                    message:
+                        'No tiene permisos para realizar esta acción',
+                    code: 'FORBIDDEN',
+                    permission: permissionCode,
+                });
+            }
+
+            next();
+        } catch (error) {
+            next(error);
+        }
+    };
+};
+
+/*
+|--------------------------------------------------------------------------
+| HEALTH
+|--------------------------------------------------------------------------
+*/
+
+app.get('/api/health', async (_req, res) => {
+    try {
+        await pool.query('SELECT 1');
+
+        res.json({
+            ok: true,
+            service: 'NEXO API',
+            database: 'up',
+            ai: Boolean(process.env.OPENAI_API_KEY),
+        });
+    } catch {
+        res.status(503).json({
+            ok: false,
+            service: 'NEXO API',
+            database: 'down',
+        });
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - REGISTER
+|--------------------------------------------------------------------------
+*/
+
+app.post('/api/auth/register', async (req, res, next) => {
+    try {
+        const name = String(
+            req.body.name || ''
+        ).trim();
+
+        const email = String(
+            req.body.email || ''
+        )
+            .trim()
+            .toLowerCase();
+
+        const password = String(
+            req.body.password || ''
+        );
+
+        if (name.length < 3) {
+            return res.status(400).json({
+                message:
+                    'El nombre debe tener al menos 3 caracteres',
+                code: 'INVALID_NAME',
+            });
+        }
+
+        if (
+            !email.includes('@') ||
+            email.length > 150
+        ) {
+            return res.status(400).json({
+                message:
+                    'Correo electrónico inválido',
+                code: 'INVALID_EMAIL',
+            });
+        }
+
+        if (password.length < 8) {
+            return res.status(400).json({
+                message:
+                    'La contraseña debe tener al menos 8 caracteres',
+                code: 'INVALID_PASSWORD',
+            });
+        }
+
+        const hash = await bcrypt.hash(
+            password,
+            12
+        );
+
+        const { rows } = await pool.query(
+            `
+            INSERT INTO users (
+                name,
+                email,
+                password_hash,
+                role
+            )
+            VALUES ($1, $2, $3, 'citizen')
+            RETURNING id, name, email, role
+            `,
+            [
+                name,
+                email,
+                hash,
+            ]
+        );
+
+        const user = rows[0];
+
+        const accessToken =
+            createAccessToken(user);
+
+        const deviceName = String(
+            req.body.deviceName ||
+            'NEXO Mobile'
+        ).slice(0, 120);
+
+        const refreshToken =
+            await createRefreshSession(
+                user.id,
+                deviceName
+            );
+
+        res.status(201).json({
+            accessToken,
+            refreshToken,
+            expiresIn: 900,
+            user: {
+                id: String(user.id),
+                name: user.name,
+                email: user.email,
+                role: user.role,
+            },
+        });
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({
+                message:
+                    'El correo ya está registrado',
+                code: 'EMAIL_ALREADY_EXISTS',
+            });
+        }
+
+        next(error);
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - LOGIN
+|--------------------------------------------------------------------------
+*/
+
+app.post('/api/auth/login', async (req, res, next) => {
+    try {
+        const email = String(
+            req.body.email || ''
+        )
+            .trim()
+            .toLowerCase();
+
+        const password = String(
+            req.body.password || ''
+        );
+
+        if (!email || !password) {
+            return res.status(400).json({
+                message:
+                    'Correo y contraseña son obligatorios',
+                code: 'MISSING_CREDENTIALS',
+            });
+        }
+
+        const { rows } = await pool.query(
+            `
+            SELECT
+                id,
+                name,
+                email,
+                password_hash,
+                role,
+                active
+            FROM users
+            WHERE LOWER(email) = LOWER($1)
+            LIMIT 1
+            `,
+            [email]
+        );
+
+        const user = rows[0];
+
+        if (!user) {
+            return res.status(401).json({
+                message:
+                    'Credenciales incorrectas',
+                code: 'INVALID_CREDENTIALS',
+            });
+        }
+
+        const passwordValid =
+            await bcrypt.compare(
+                password,
+                user.password_hash
+            );
+
+        if (!passwordValid) {
+            return res.status(401).json({
+                message:
+                    'Credenciales incorrectas',
+                code: 'INVALID_CREDENTIALS',
+            });
+        }
+
+        if (!user.active) {
+            return res.status(403).json({
+                message:
+                    'La cuenta está desactivada',
+                code: 'USER_INACTIVE',
+            });
+        }
+
+        const payload = {
+            id: String(user.id),
+            name: user.name,
+            email: user.email,
+            role: user.role,
+        };
+
+        const accessToken =
+            createAccessToken(payload);
+
+        const deviceName = String(
+            req.body.deviceName ||
+            'NEXO Mobile'
+        ).slice(0, 120);
+
+        const refreshToken =
+            await createRefreshSession(
+                user.id,
+                deviceName
+            );
+
+        res.json({
+            accessToken,
+            refreshToken,
+            expiresIn: 900,
+            user: payload,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - REFRESH
+|--------------------------------------------------------------------------
+*/
+
+app.post('/api/auth/refresh', async (req, res, next) => {
+    const client = await pool.connect();
+
+    try {
+        const refreshToken = String(
+            req.body.refreshToken || ''
+        ).trim();
+
+        if (!refreshToken) {
+            return res.status(400).json({
+                message:
+                    'Refresh token requerido',
+                code: 'REFRESH_TOKEN_REQUIRED',
+            });
+        }
+
+        const tokenHash =
+            hashRefreshToken(refreshToken);
+
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(
+            `
+            SELECT
+                rt.id AS refresh_token_id,
+                rt.user_id,
+                rt.device_name,
+                rt.expires_at,
+                rt.revoked_at,
+                u.id,
+                u.name,
+                u.email,
+                u.role,
+                u.active
+            FROM refresh_tokens rt
+            INNER JOIN users u
+                ON u.id = rt.user_id
+            WHERE rt.token_hash = $1
+            FOR UPDATE
+            `,
+            [tokenHash]
+        );
+
+        const session = rows[0];
+
+        if (!session) {
+            await client.query('ROLLBACK');
+
+            return res.status(401).json({
+                message:
+                    'Refresh token no válido',
+                code: 'INVALID_REFRESH_TOKEN',
+            });
+        }
+
+        if (session.revoked_at) {
+            await client.query('ROLLBACK');
+
+            return res.status(401).json({
+                message:
+                    'La sesión fue revocada',
+                code: 'REFRESH_TOKEN_REVOKED',
+            });
+        }
+
+        if (
+            new Date(session.expires_at).getTime() <=
+            Date.now()
+        ) {
+            await client.query(
+                `
+                UPDATE refresh_tokens
+                SET revoked_at = NOW()
+                WHERE id = $1
+                `,
+                [session.refresh_token_id]
+            );
+
+            await client.query('COMMIT');
+
+            return res.status(401).json({
+                message:
+                    'La sesión ha expirado',
+                code: 'REFRESH_TOKEN_EXPIRED',
+            });
+        }
+
+        if (!session.active) {
+            await client.query(
+                `
+                UPDATE refresh_tokens
+                SET revoked_at = NOW()
+                WHERE id = $1
+                `,
+                [session.refresh_token_id]
+            );
+
+            await client.query('COMMIT');
+
+            return res.status(403).json({
+                message:
+                    'La cuenta está desactivada',
+                code: 'USER_INACTIVE',
+            });
+        }
+
+        /*
+         * Rotación del refresh token.
+         */
+
+        await client.query(
+            `
+            UPDATE refresh_tokens
+            SET
+                revoked_at = NOW(),
+                last_used_at = NOW()
+            WHERE id = $1
+            `,
+            [session.refresh_token_id]
+        );
+
+        const newRefreshToken =
+            generateRefreshToken();
+
+        const newTokenHash =
+            hashRefreshToken(
+                newRefreshToken
+            );
+
+        const expiresAt =
+            getRefreshExpirationDate();
+
+        await client.query(
+            `
+            INSERT INTO refresh_tokens (
+                user_id,
+                token_hash,
+                device_name,
+                expires_at
+            )
+            VALUES ($1, $2, $3, $4)
+            `,
+            [
+                session.user_id,
+                newTokenHash,
+                session.device_name,
+                expiresAt,
+            ]
+        );
+
+        const user = {
+            id: String(session.user_id),
+            name: session.name,
+            email: session.email,
+            role: session.role,
+        };
+
+        const accessToken =
+            createAccessToken(user);
+
+        await client.query('COMMIT');
+
+        res.json({
+            accessToken,
+            refreshToken:
+                newRefreshToken,
+            expiresIn: 900,
+        });
+    } catch (error) {
+        try {
+            await client.query('ROLLBACK');
+        } catch {
+            // Ignorar error secundario.
+        }
+
+        next(error);
+    } finally {
+        client.release();
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - LOGOUT
+|--------------------------------------------------------------------------
+*/
+
+app.post('/api/auth/logout', async (req, res, next) => {
+    try {
+        const refreshToken = String(
+            req.body.refreshToken || ''
+        ).trim();
+
+        if (!refreshToken) {
+            return res.status(400).json({
+                message:
+                    'Refresh token requerido',
+                code: 'REFRESH_TOKEN_REQUIRED',
+            });
+        }
+
+        const tokenHash =
+            hashRefreshToken(refreshToken);
+
+        await pool.query(
+            `
+            UPDATE refresh_tokens
+            SET revoked_at =
+                COALESCE(revoked_at, NOW())
+            WHERE token_hash = $1
+            `,
+            [tokenHash]
+        );
+
+        res.json({
+            ok: true,
+            message:
+                'Sesión cerrada correctamente',
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - ME
+|--------------------------------------------------------------------------
+*/
+
+app.get('/api/auth/me', auth, async (req, res, next) => {
+    try {
+        const { rows } = await pool.query(
+            `
+            SELECT
+                u.id,
+                u.name,
+                u.email,
+                u.role,
+                u.active,
+                u.created_at,
+                COALESCE(
+                    json_agg(
+                        DISTINCT p.code
+                    ) FILTER (
+                        WHERE p.code IS NOT NULL
+                    ),
+                    '[]'
+                ) AS permissions
+            FROM users u
+            LEFT JOIN roles r
+                ON r.name = u.role
+            LEFT JOIN role_permissions rp
+                ON rp.role_id = r.id
+            LEFT JOIN permissions p
+                ON p.id = rp.permission_id
+            WHERE u.id = $1
+            GROUP BY
+                u.id,
+                u.name,
+                u.email,
+                u.role,
+                u.active,
+                u.created_at
+            `,
+            [req.user.id]
+        );
+
+        const user = rows[0];
+
+        if (!user) {
+            return res.status(404).json({
+                message:
+                    'Usuario no encontrado',
+                code: 'USER_NOT_FOUND',
+            });
+        }
+
+        res.json({
+            user: {
+                id: String(user.id),
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                active: user.active,
+                createdAt: user.created_at,
+            },
+            permissions: user.permissions,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| NEEDS
+|--------------------------------------------------------------------------
+*/
+
+app.get(
+    '/api/needs',
+    auth,
+    requirePermission('needs.read'),
+    async (req, res, next) => {
+        try {
+            const { rows } = await pool.query(`
+                SELECT
+                    n.id,
+                    n.description,
+                    n.category,
+                    n.status,
+                    n.ai_category,
+                    n.ai_confidence,
+                    n.created_at,
+                    u.name AS author
+                FROM needs n
+                JOIN users u
+                    ON u.id = n.user_id
+                ORDER BY n.created_at DESC
+                LIMIT 50
+            `);
+
+            res.json(rows);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+app.post(
+    '/api/needs',
+    auth,
+    requirePermission('needs.create'),
+    async (req, res, next) => {
+        try {
+            const description = String(
+                req.body.description || ''
+            ).trim();
+
+            if (description.length < 5) {
+                return res.status(400).json({
+                    message:
+                        'Describe mejor la necesidad',
+                    code: 'INVALID_DESCRIPTION',
+                });
+            }
+
+            let ai =
+                classifyNeed(description);
+
+            try {
+                ai =
+                    await classifyWithAI(
+                        description
+                    );
+            } catch {
+                // Clasificación local.
+            }
+
+            const category = String(
+                req.body.category ||
+                ai.category
+            ).trim();
+
+            const { rows } =
+                await pool.query(
+                    `
+                    INSERT INTO needs (
+                        user_id,
+                        description,
+                        category,
+                        ai_category,
+                        ai_confidence
+                    )
+                    VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5
+                    )
+                    RETURNING
+                        id,
+                        description,
+                        category,
+                        status,
+                        ai_category,
+                        ai_confidence,
+                        created_at
+                    `,
+                    [
+                        req.user.id,
+                        description,
+                        category,
+                        ai.category,
+                        ai.confidence,
+                    ]
+                );
+
+            res.status(201).json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| COMMUNITY
+|--------------------------------------------------------------------------
+*/
+
+app.get(
+    '/api/community',
+    auth,
+    requirePermission('community.read'),
+    async (req, res, next) => {
+        try {
+            const { rows } =
+                await pool.query(`
+                    SELECT
+                        p.id,
+                        p.body,
+                        p.created_at,
+                        u.name AS author
+                    FROM community_posts p
+                    JOIN users u
+                        ON u.id = p.user_id
+                    ORDER BY
+                        p.created_at DESC
+                    LIMIT 50
+                `);
+
+            res.json(rows);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+app.post(
+    '/api/community',
+    auth,
+    requirePermission('community.create'),
+    async (req, res, next) => {
+        try {
+            const body = String(
+                req.body.body || ''
+            ).trim();
+
+            if (body.length < 3) {
+                return res.status(400).json({
+                    message:
+                        'La publicación es demasiado corta',
+                    code: 'INVALID_BODY',
+                });
+            }
+
+            const { rows } =
+                await pool.query(
+                    `
+                    INSERT INTO community_posts (
+                        user_id,
+                        body
+                    )
+                    VALUES ($1, $2)
+                    RETURNING
+                        id,
+                        body,
+                        created_at
+                    `,
+                    [
+                        req.user.id,
+                        body,
+                    ]
+                );
+
+            res.status(201).json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| MAP
+|--------------------------------------------------------------------------
+*/
+
+app.get(
+    '/api/map/places',
+    async (_req, res, next) => {
+        try {
+            const { rows } =
+                await pool.query(`
+                    SELECT
+                        id,
+                        name,
+                        type,
+                        latitude,
+                        longitude,
+                        description
+                    FROM map_places
+                    ORDER BY id
+                `);
+
+            res.json(
+                rows.map((place) => ({
+                    ...place,
+                    latitude:
+                        Number(place.latitude),
+                    longitude:
+                        Number(place.longitude),
+                }))
+            );
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| AI
+|--------------------------------------------------------------------------
+*/
+
+app.post(
+    '/api/ai/assistant',
+    auth,
+    async (req, res, next) => {
+        try {
+            const message = String(
+                req.body.message || ''
+            ).trim();
+
+            if (message.length < 3) {
+                return res.status(400).json({
+                    message:
+                        'Escribe una consulta',
+                    code: 'INVALID_MESSAGE',
+                });
+            }
+
+            res.json(
+                await askAI(message)
+            );
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| STATISTICS
+|--------------------------------------------------------------------------
+*/
+
+app.get(
+    '/api/stats',
+    auth,
+    requirePermission('stats.read'),
+    async (_req, res, next) => {
+        try {
+            const [
+                needs,
+                posts,
+                users,
+                categories,
+            ] = await Promise.all([
+                pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::int AS total
+                    FROM needs
+                    `
+                ),
+
+                pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::int AS total
+                    FROM community_posts
+                    `
+                ),
+
+                pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::int AS total
+                    FROM users
+                    WHERE active = true
+                    `
+                ),
+
+                pool.query(`
+                    SELECT
+                        category,
+                        COUNT(*)::int AS total
+                    FROM needs
+                    GROUP BY category
+                    ORDER BY total DESC
+                `),
+            ]);
+
+            res.json({
+                needs:
+                    needs.rows[0].total,
+
+                posts:
+                    posts.rows[0].total,
+
+                users:
+                    users.rows[0].total,
+
+                categories:
+                    categories.rows,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| ERROR HANDLER
+|--------------------------------------------------------------------------
+*/
+
+app.use(
+    (error, _req, res, _next) => {
+        console.error(error);
+
+        res.status(500).json({
+            message:
+                'Error interno del servidor',
+            code:
+                'INTERNAL_SERVER_ERROR',
+        });
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| SERVER
+|--------------------------------------------------------------------------
+*/
+
+app.listen(
+    PORT,
+    () => {
+        console.log(
+            `NEXO API en http://localhost:${PORT}`
+        );
+    }
+);
