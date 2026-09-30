@@ -1,10 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import {
   Pressable,
   StyleSheet,
   Text,
   View,
+  ActivityIndicator,
 } from 'react-native';
 
 import {
@@ -24,6 +25,7 @@ import { ProfileView } from '../views/ProfileView';
 import { AIView } from '../views/AIView';
 import { EmergencyView } from '../views/EmergencyView';
 
+import { AuthService } from '../services/AuthService';
 import { colors } from '../shared/theme';
 
 const tabs = [
@@ -46,24 +48,89 @@ export function AppContent() {
   const [screen, setScreen] =
     useState('home');
 
+  const [restoringSession, setRestoringSession] =
+    useState(true);
+
+  /**
+   * Restaura la sesión guardada en SecureStore.
+   *
+   * Si el access token todavía sirve:
+   *   /auth/me lo valida.
+   *
+   * Si expiró:
+   *   AuthService intenta automáticamente
+   *   utilizar el refresh token.
+   */
+  useEffect(() => {
+    let mounted = true;
+
+    const restore = async () => {
+      try {
+        const session =
+          await AuthService.restoreSession();
+
+        if (!mounted) {
+          return;
+        }
+
+        if (session) {
+          setUser(session.user);
+          setToken(session.accessToken);
+          setScreen('home');
+        }
+      } catch (error) {
+        console.error(
+          'Error restaurando sesión:',
+          error,
+        );
+      } finally {
+        if (mounted) {
+          setRestoringSession(false);
+        }
+      }
+    };
+
+    restore();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const finish = useCallback(() => {
     setSplash(false);
   }, []);
 
+  /**
+   * Se ejecuta después de un login correcto.
+   *
+   * AuthService ya guardó accessToken y refreshToken
+   * en SecureStore.
+   */
   const login = useCallback(
-    (u: User, t: string) => {
-      setUser(u);
-      setToken(t);
+    (session: {
+      user: User;
+      accessToken: string;
+      refreshToken: string;
+    }) => {
+      setUser(session.user);
+      setToken(session.accessToken);
       setScreen('home');
     },
-    []
+    [],
   );
 
-  const logout = () => {
+  /**
+   * Cierra sesión tanto en el servidor como
+   * en el almacenamiento seguro del dispositivo.
+   */
+  const logout = useCallback(async () => {
+    await AuthService.logout();
+
     setUser(null);
     setToken(undefined);
     setScreen('home');
-  };
+  }, []);
 
   // SPLASH
 
@@ -75,9 +142,26 @@ export function AppContent() {
     );
   }
 
+  // RESTAURANDO SESIÓN
+
+  if (restoringSession) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+        />
+
+        <Text style={styles.loadingText}>
+          Restaurando sesión...
+        </Text>
+      </View>
+    );
+  }
+
   // LOGIN
 
-  if (!user) {
+  if (!user || !token) {
     return (
       <AuthView
         onSuccess={login}
@@ -185,7 +269,7 @@ export function AppContent() {
                   style={[
                     s.icon,
                     screen === key &&
-                      s.active,
+                    s.active,
                   ]}
                 >
                   {icon}
@@ -195,13 +279,13 @@ export function AppContent() {
                   style={[
                     s.label,
                     screen === key &&
-                      s.active,
+                    s.active,
                   ]}
                 >
                   {label}
                 </Text>
               </Pressable>
-            )
+            ),
           )}
         </View>
 
@@ -222,6 +306,23 @@ export function AppContent() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+
+  loadingText: {
+    marginTop: 12,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+});
 
 const s = StyleSheet.create({
   root: {

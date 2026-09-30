@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 
 import { classifyNeed } from './services/classifyNeed.js';
 import { askAI, classifyWithAI } from './services/ai.js';
+import { sendVerificationEmail } from './services/email.js';
 
 const { Pool } = pg;
 
@@ -20,6 +21,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_DAYS = 30;
+const VERIFICATION_CODE_MINUTES = 10;
+const VERIFICATION_MAX_ATTEMPTS = 5;
+const VERIFICATION_RESEND_SECONDS = 60;
 
 if (!DATABASE_URL) {
     console.error('ERROR: DATABASE_URL no está configurada.');
@@ -98,6 +102,73 @@ function getRefreshExpirationDate() {
     );
 
     return expiresAt;
+}
+
+function generateVerificationCode() {
+    return String(
+        crypto.randomInt(100000, 1000000)
+    );
+}
+
+function hashVerificationCode(code) {
+    return crypto
+        .createHash('sha256')
+        .update(code)
+        .digest('hex');
+}
+
+function getVerificationExpirationDate() {
+    const expiresAt = new Date();
+
+    expiresAt.setMinutes(
+        expiresAt.getMinutes() +
+        VERIFICATION_CODE_MINUTES
+    );
+
+    return expiresAt;
+}
+
+async function createEmailVerificationCode(userId) {
+    /*
+     * Invalida códigos anteriores que todavía
+     * estén activos.
+     */
+    await pool.query(
+        `
+        UPDATE email_verification_codes
+        SET used_at = NOW()
+        WHERE user_id = $1
+          AND used_at IS NULL
+        `,
+        [userId]
+    );
+
+    const code =
+        generateVerificationCode();
+
+    const codeHash =
+        hashVerificationCode(code);
+
+    const expiresAt =
+        getVerificationExpirationDate();
+
+    await pool.query(
+        `
+        INSERT INTO email_verification_codes (
+            user_id,
+            code_hash,
+            expires_at
+        )
+        VALUES ($1, $2, $3)
+        `,
+        [
+            userId,
+            codeHash,
+            expiresAt,
+        ]
+    );
+
+    return code;
 }
 
 async function createRefreshSession(userId, deviceName = null) {
@@ -383,24 +454,33 @@ app.post('/api/auth/register', async (req, res, next) => {
 
         const user = rows[0];
 
-        const accessToken =
-            createAccessToken(user);
-
-        const deviceName = String(
-            req.body.deviceName ||
-            'NEXO Mobile'
-        ).slice(0, 120);
-
-        const refreshToken =
-            await createRefreshSession(
-                user.id,
-                deviceName
+        const verificationCode =
+            await createEmailVerificationCode(
+                user.id
             );
 
+        let emailSent = false;
+
+        try {
+            await sendVerificationEmail({
+                to: user.email,
+                name: user.name,
+                code: verificationCode,
+            });
+
+            emailSent = true;
+        } catch (emailError) {
+            console.error(
+                'No se pudo enviar el correo de verificación:',
+                emailError
+            );
+        }
+
         res.status(201).json({
-            accessToken,
-            refreshToken,
-            expiresIn: 900,
+            message:
+                'Cuenta creada. Verifique su correo electrónico.',
+            verificationRequired: true,
+            emailSent,
             user: {
                 id: String(user.id),
                 name: user.name,
@@ -420,6 +500,298 @@ app.post('/api/auth/register', async (req, res, next) => {
         next(error);
     }
 });
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - VERIFY EMAIL
+|--------------------------------------------------------------------------
+*/
+
+app.post(
+    '/api/auth/verify-email',
+    async (req, res, next) => {
+        try {
+            const email = String(
+                req.body.email || ''
+            )
+                .trim()
+                .toLowerCase();
+
+            const code = String(
+                req.body.code || ''
+            ).trim();
+
+            if (!email || !/^\d{6}$/.test(code)) {
+                return res.status(400).json({
+                    message:
+                        'Correo y código de 6 dígitos son obligatorios.',
+                    code: 'INVALID_VERIFICATION_DATA',
+                });
+            }
+
+            const { rows: userRows } =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        name,
+                        email,
+                        email_verified
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [email]
+                );
+
+            const user = userRows[0];
+
+            if (!user) {
+                return res.status(400).json({
+                    message:
+                        'Código de verificación no válido.',
+                    code: 'INVALID_VERIFICATION_CODE',
+                });
+            }
+
+            if (user.email_verified) {
+                return res.json({
+                    ok: true,
+                    message:
+                        'El correo ya está verificado.',
+                    alreadyVerified: true,
+                });
+            }
+
+            const { rows: codeRows } =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        code_hash,
+                        attempts,
+                        expires_at
+                    FROM email_verification_codes
+                    WHERE user_id = $1
+                      AND used_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    `,
+                    [user.id]
+                );
+
+            const verification =
+                codeRows[0];
+
+            if (!verification) {
+                return res.status(400).json({
+                    message:
+                        'No existe un código de verificación activo.',
+                    code: 'NO_ACTIVE_CODE',
+                });
+            }
+
+            if (
+                new Date(
+                    verification.expires_at
+                ).getTime() <= Date.now()
+            ) {
+                await pool.query(
+                    `
+                    UPDATE email_verification_codes
+                    SET used_at = NOW()
+                    WHERE id = $1
+                    `,
+                    [verification.id]
+                );
+
+                return res.status(400).json({
+                    message:
+                        'El código de verificación ha expirado.',
+                    code: 'VERIFICATION_CODE_EXPIRED',
+                });
+            }
+
+            if (
+                verification.attempts >=
+                VERIFICATION_MAX_ATTEMPTS
+            ) {
+                await pool.query(
+                    `
+                    UPDATE email_verification_codes
+                    SET used_at = NOW()
+                    WHERE id = $1
+                    `,
+                    [verification.id]
+                );
+
+                return res.status(429).json({
+                    message:
+                        'Se superó el número máximo de intentos. Solicite un nuevo código.',
+                    code: 'TOO_MANY_ATTEMPTS',
+                });
+            }
+
+            const submittedHash =
+                hashVerificationCode(code);
+
+            if (
+                submittedHash !==
+                verification.code_hash
+            ) {
+                await pool.query(
+                    `
+                    UPDATE email_verification_codes
+                    SET attempts = attempts + 1
+                    WHERE id = $1
+                    `,
+                    [verification.id]
+                );
+
+                return res.status(400).json({
+                    message:
+                        'Código de verificación incorrecto.',
+                    code: 'INVALID_VERIFICATION_CODE',
+                });
+            }
+
+            await pool.query(
+                `
+                UPDATE users
+                SET
+                    email_verified = TRUE,
+                    email_verified_at = NOW()
+                WHERE id = $1
+                `,
+                [user.id]
+            );
+
+            await pool.query(
+                `
+                UPDATE email_verification_codes
+                SET
+                    used_at = NOW()
+                WHERE id = $1
+                `,
+                [verification.id]
+            );
+
+            res.json({
+                ok: true,
+                message:
+                    'Correo electrónico verificado correctamente.',
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/*
+|--------------------------------------------------------------------------
+| AUTH - RESEND VERIFICATION
+|--------------------------------------------------------------------------
+*/
+
+app.post(
+    '/api/auth/resend-verification',
+    async (req, res, next) => {
+        try {
+            const email = String(
+                req.body.email || ''
+            )
+                .trim()
+                .toLowerCase();
+
+            if (!email) {
+                return res.status(400).json({
+                    message:
+                        'El correo es obligatorio.',
+                    code: 'EMAIL_REQUIRED',
+                });
+            }
+
+            const { rows } =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        name,
+                        email,
+                        email_verified
+                    FROM users
+                    WHERE LOWER(email) = LOWER($1)
+                    LIMIT 1
+                    `,
+                    [email]
+                );
+
+            const user = rows[0];
+
+            /*
+             * Respuesta genérica para no revelar
+             * si el correo existe.
+             */
+            if (!user || user.email_verified) {
+                return res.json({
+                    ok: true,
+                    message:
+                        'Si la cuenta requiere verificación, se enviará un nuevo código.',
+                });
+            }
+
+            const { rows: recentRows } =
+                await pool.query(
+                    `
+                    SELECT created_at
+                    FROM email_verification_codes
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    `,
+                    [user.id]
+                );
+
+            const recentCode =
+                recentRows[0];
+
+            if (
+                recentCode &&
+                Date.now() -
+                new Date(
+                    recentCode.created_at
+                ).getTime() <
+                VERIFICATION_RESEND_SECONDS *
+                1000
+            ) {
+                return res.status(429).json({
+                    message:
+                        'Espere un momento antes de solicitar otro código.',
+                    code: 'RESEND_TOO_SOON',
+                });
+            }
+
+            const verificationCode =
+                await createEmailVerificationCode(
+                    user.id
+                );
+
+            await sendVerificationEmail({
+                to: user.email,
+                name: user.name,
+                code: verificationCode,
+            });
+
+            res.json({
+                ok: true,
+                message:
+                    'Si la cuenta requiere verificación, se envió un nuevo código.',
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
 
 /*
 |--------------------------------------------------------------------------
@@ -455,7 +827,8 @@ app.post('/api/auth/login', async (req, res, next) => {
                 email,
                 password_hash,
                 role,
-                active
+                active,
+                email_verified
             FROM users
             WHERE LOWER(email) = LOWER($1)
             LIMIT 1
@@ -492,6 +865,16 @@ app.post('/api/auth/login', async (req, res, next) => {
                 message:
                     'La cuenta está desactivada',
                 code: 'USER_INACTIVE',
+            });
+        }
+
+        if (!user.email_verified) {
+            return res.status(403).json({
+                message:
+                    'Debe verificar su correo electrónico antes de iniciar sesión.',
+                code: 'EMAIL_NOT_VERIFIED',
+                requiresVerification: true,
+                email: user.email,
             });
         }
 

@@ -22,7 +22,8 @@
         }
       ],
       "expo-status-bar",
-      "react-native-maps"
+      "react-native-maps",
+      "expo-secure-store"
     ],
     "ios": {
       "supportsTablet": true,

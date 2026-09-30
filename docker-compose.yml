@@ -1,5 +1,8 @@
 services:
 
+  # ============================================================
+  # BASE DE DATOS - POSTGRESQL
+  # ============================================================
   db:
     image: postgres:17-alpine
 
@@ -12,7 +15,10 @@ services:
       - "5432:5432"
 
     volumes:
+      # Datos persistentes de PostgreSQL
       - postgres_data:/var/lib/postgresql/data
+
+      # Esquema inicial de la base de datos
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
 
     healthcheck:
@@ -21,19 +27,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # ============================================================
+  # API - NODE.JS / EXPRESS
+  # ============================================================
   api:
-    build: ./backend
+    build:
+      context: ./backend
 
     environment:
+      # Puerto de la API
       PORT: 3000
 
+      # PostgreSQL
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nexo}
 
+      # JWT
       JWT_SECRET: ${JWT_SECRET}
 
+      # OpenAI
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+
+      # ========================================================
+      # GMAIL SMTP
+      # ========================================================
+      MAIL_USER: ${MAIL_USER}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_FROM: ${MAIL_FROM}
 
     ports:
       - "3000:3000"
@@ -42,6 +62,8 @@ services:
       db:
         condition: service_healthy
 
+# ==============================================================
+# VOLÚMENES
+# ==============================================================
 volumes:
   postgres_data:
-
