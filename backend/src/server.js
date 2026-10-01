@@ -25,6 +25,10 @@ const VERIFICATION_CODE_MINUTES = 10;
 const VERIFICATION_MAX_ATTEMPTS = 5;
 const VERIFICATION_RESEND_SECONDS = 60;
 
+const PASSWORD_RESET_CODE_MINUTES = 10;
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_RESEND_SECONDS = 60;
+
 if (!DATABASE_URL) {
     console.error('ERROR: DATABASE_URL no está configurada.');
     process.exit(1);
@@ -167,6 +171,64 @@ async function createEmailVerificationCode(userId) {
             expiresAt,
         ]
     );
+
+    return code;
+}
+
+function getPasswordResetExpirationDate() {
+    const expiresAt = new Date();
+
+    expiresAt.setMinutes(
+        expiresAt.getMinutes() +
+        PASSWORD_RESET_CODE_MINUTES
+    );
+
+    return expiresAt;
+}
+
+
+async function createPasswordResetCode(userId) {
+
+    // Invalida códigos anteriores activos
+    await pool.query(
+        `
+        UPDATE password_reset_codes
+        SET used_at = NOW()
+        WHERE user_id = $1
+          AND used_at IS NULL
+        `,
+        [userId]
+    );
+
+
+    const code =
+        generateVerificationCode();
+
+
+    const codeHash =
+        hashVerificationCode(code);
+
+
+    const expiresAt =
+        getPasswordResetExpirationDate();
+
+
+    await pool.query(
+        `
+        INSERT INTO password_reset_codes (
+            user_id,
+            code_hash,
+            expires_at
+        )
+        VALUES ($1, $2, $3)
+        `,
+        [
+            userId,
+            codeHash,
+            expiresAt
+        ]
+    );
+
 
     return code;
 }
