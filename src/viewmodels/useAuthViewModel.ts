@@ -22,7 +22,11 @@ export function useAuthViewModel({
 
   const [register, setRegister] = useState(false);
   const [verification, setVerification] = useState(false);
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [resetPassword, setResetPassword] = useState(false);
+
   const [verificationCode, setVerificationCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -174,6 +178,95 @@ export function useAuthViewModel({
     }
   };
 
+  const requestPasswordReset = async () => {
+    setError('');
+    setMessage('');
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail.includes('@')) {
+      setError('Usa un correo electrónico válido.');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result =
+        await AuthService.forgotPassword(cleanEmail);
+
+      setMessage(
+        result.message ||
+        'Si el correo está registrado, recibirá un código de recuperación.',
+      );
+
+      setForgotPassword(false);
+      setResetPassword(true);
+    } catch (e: any) {
+      setError(
+        e?.message ||
+        'No fue posible solicitar la recuperación.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+  const confirmPasswordReset = async () => {
+    setError('');
+    setMessage('');
+
+    const cleanEmail = email.trim().toLowerCase();
+    const code = verificationCode.trim();
+
+    if (!cleanEmail.includes('@')) {
+      setError('Usa un correo electrónico válido.');
+      return;
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      setError(
+        'Escriba el código de recuperación de 6 dígitos.',
+      );
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setError(
+        'La nueva contraseña debe tener al menos 8 caracteres.',
+      );
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result = await AuthService.resetPassword(
+        cleanEmail,
+        code,
+        newPassword,
+      );
+
+      setMessage(
+        result.message ||
+        'Contraseña actualizada correctamente.',
+      );
+
+      setVerificationCode('');
+      setNewPassword('');
+      setForgotPassword(false);
+      setResetPassword(false);
+      setPassword('');
+    } catch (e: any) {
+      setError(
+        e?.message ||
+        'No fue posible actualizar la contraseña.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   const backToLogin = () => {
     setVerification(false);
     setRegister(false);
@@ -190,8 +283,11 @@ export function useAuthViewModel({
 
     register,
     verification,
+    forgotPassword,
+    resetPassword,
 
     verificationCode,
+    newPassword,
 
     loading,
     error,
@@ -203,11 +299,16 @@ export function useAuthViewModel({
     setConfirmPassword,
 
     setRegister,
+    setForgotPassword,
+    setResetPassword,
     setVerificationCode,
+    setNewPassword,
 
     submit,
     verify,
     resend,
+    requestPasswordReset,
+    confirmPasswordReset,
     backToLogin,
   };
 }

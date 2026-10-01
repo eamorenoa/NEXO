@@ -28,6 +28,151 @@ export function AuthView({
   const [showPassword, setShowPassword] =
     useState(false);
 
+  if (vm.resetPassword) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.brand}>
+          <Text style={styles.logo}>NEXO</Text>
+
+          <Text style={styles.tag}>
+            Cambiar contraseña
+          </Text>
+
+          <Text style={styles.description}>
+            Ingrese el código que recibió en su correo
+            y establezca una nueva contraseña.
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.title}>
+            Nueva contraseña
+          </Text>
+
+          <TextInput
+            style={styles.codeInput}
+            placeholder="Código de 6 dígitos"
+            keyboardType="number-pad"
+            maxLength={6}
+            value={vm.verificationCode}
+            onChangeText={vm.setVerificationCode}
+          />
+
+          <TextInput
+            style={styles.input}
+            placeholder="Nueva contraseña"
+            secureTextEntry
+            value={vm.newPassword}
+            onChangeText={vm.setNewPassword}
+          />
+
+          {vm.error ? (
+            <Text style={styles.error}>
+              {vm.error}
+            </Text>
+          ) : null}
+
+          {vm.message ? (
+            <Text style={styles.success}>
+              {vm.message}
+            </Text>
+          ) : null}
+
+          <Pressable
+            disabled={vm.loading}
+            onPress={vm.confirmPasswordReset}
+            style={styles.button}
+          >
+            {vm.loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.buttonText}>
+                Cambiar contraseña
+              </Text>
+            )}
+          </Pressable>
+
+          <Pressable
+            onPress={vm.backToLogin}
+            style={styles.switchButton}
+          >
+            <Text style={styles.link}>
+              Volver al inicio de sesión
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  if (vm.forgotPassword) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.brand}>
+          <Text style={styles.logo}>NEXO</Text>
+
+          <Text style={styles.tag}>
+            Recuperar contraseña
+          </Text>
+
+          <Text style={styles.description}>
+            Ingrese su correo electrónico y recibirá
+            un código para recuperar su cuenta.
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.title}>
+            Recuperación de contraseña
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Correo electrónico"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            value={vm.email}
+            onChangeText={vm.setEmail}
+          />
+
+          {vm.error ? (
+            <Text style={styles.error}>
+              {vm.error}
+            </Text>
+          ) : null}
+
+          {vm.message ? (
+            <Text style={styles.success}>
+              {vm.message}
+            </Text>
+          ) : null}
+
+          <Pressable
+            disabled={vm.loading}
+            onPress={vm.requestPasswordReset}
+            style={styles.button}
+          >
+            {vm.loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.buttonText}>
+                Enviar código
+              </Text>
+            )}
+          </Pressable>
+
+          <Pressable
+            onPress={vm.backToLogin}
+            style={styles.switchButton}
+          >
+            <Text style={styles.link}>
+              Volver al inicio de sesión
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
   if (vm.verification) {
     return (
       <View style={styles.screen}>
@@ -211,6 +356,19 @@ export function AuthView({
             </Text>
           )}
         </Pressable>
+
+        {!vm.register ? (
+          <Pressable
+            onPress={() => {
+              vm.setForgotPassword(true);
+            }}
+            style={styles.switchButton}
+          >
+            <Text style={styles.link}>
+              ¿Olvidó su contraseña?
+            </Text>
+          </Pressable>
+        ) : null}
 
         <Pressable
           onPress={() =>

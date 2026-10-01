@@ -31,6 +31,16 @@ export interface RefreshResponse {
   user: User;
 }
 
+export interface ForgotPasswordResponse {
+  ok: boolean;
+  message: string;
+}
+
+export interface ResetPasswordResponse {
+  ok: boolean;
+  message: string;
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -93,6 +103,25 @@ export const api = {
     request<VerifyEmailResponse>('/auth/verify-email', {
       method: 'POST',
       body: JSON.stringify({ email, code }),
+    }),
+
+  forgotPassword: (email: string) =>
+    request<ForgotPasswordResponse>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (
+    email: string,
+    code: string,
+    newPassword: string,
+  ) =>
+    request<ResetPasswordResponse>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        code,
+        newPassword,
+      }),
     }),
 
   resendVerification: (email: string) =>

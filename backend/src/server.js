@@ -9,7 +9,10 @@ import crypto from 'node:crypto';
 
 import { classifyNeed } from './services/classifyNeed.js';
 import { askAI, classifyWithAI } from './services/ai.js';
-import { sendVerificationEmail } from './services/email.js';
+import {
+    sendVerificationEmail,
+    sendPasswordResetEmail,
+} from './services/email.js';
 
 const { Pool } = pg;
 
@@ -442,6 +445,263 @@ app.get('/api/health', async (_req, res) => {
     }
 });
 
+
+
+
+/*
+|-------------------------------------------------------------------------
+| EDPOINTS DE AUTENTICACIÓN
+|-------------------------------------------------------------------------
+*/
+app.post('/api/auth/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email || typeof email !== 'string') {
+            return res.status(400).json({
+                ok: false,
+                message: 'El correo electrónico es obligatorio.',
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const result = await pool.query(
+            `
+            SELECT id, email, name
+            FROM users
+            WHERE LOWER(email) = $1
+            LIMIT 1
+            `,
+            [normalizedEmail]
+        );
+
+        if (result.rowCount === 0) {
+            return res.json({
+                ok: true,
+                message:
+                    'Si el correo está registrado, recibirá un código de recuperación.',
+            });
+        }
+
+        const user = result.rows[0];
+
+        const code = await createPasswordResetCode(user.id);
+
+        await sendPasswordResetEmail(
+            user.email,
+            user.name,
+            code
+        );
+
+        return res.json({
+            ok: true,
+            message:
+                'Si el correo está registrado, recibirá un código de recuperación.',
+        });
+    } catch (error) {
+        console.error(
+            'Error en forgot-password:',
+            error
+        );
+
+        return res.status(500).json({
+            ok: false,
+            message:
+                'No fue posible procesar la solicitud.',
+        });
+    }
+});
+
+/*
+|--------------------------------------------------------------------------
+| EDPOINTS DE RECUPERACION DE CONTRASEÑA
+|-------------------------------------------------------------------------
+*/
+app.post('/api/auth/reset-password', async (req, res, next) => {
+    try {
+        const email = String(
+            req.body.email || ''
+        )
+            .trim()
+            .toLowerCase();
+
+        const code = String(
+            req.body.code || ''
+        ).trim();
+
+        const newPassword = String(
+            req.body.newPassword || ''
+        );
+
+        if (
+            !email ||
+            !/^\d{6}$/.test(code) ||
+            !newPassword
+        ) {
+            return res.status(400).json({
+                message:
+                    'Correo, código y nueva contraseña son obligatorios.',
+                code: 'INVALID_RESET_DATA',
+            });
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                message:
+                    'La nueva contraseña debe tener al menos 8 caracteres.',
+                code: 'INVALID_PASSWORD',
+            });
+        }
+
+        const { rows: userRows } =
+            await pool.query(
+                `
+                SELECT id
+                FROM users
+                WHERE LOWER(email) = LOWER($1)
+                LIMIT 1
+                `,
+                [email]
+            );
+
+        const user = userRows[0];
+
+        if (!user) {
+            return res.status(400).json({
+                message:
+                    'Código de recuperación no válido.',
+                code: 'INVALID_RESET_CODE',
+            });
+        }
+
+        const { rows: codeRows } =
+            await pool.query(
+                `
+                SELECT
+                    id,
+                    code_hash,
+                    attempts,
+                    expires_at
+                FROM password_reset_codes
+                WHERE user_id = $1
+                  AND used_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                `,
+                [user.id]
+            );
+
+        const resetCode = codeRows[0];
+
+        if (!resetCode) {
+            return res.status(400).json({
+                message:
+                    'No existe un código de recuperación activo.',
+                code: 'NO_ACTIVE_RESET_CODE',
+            });
+        }
+
+        if (
+            new Date(
+                resetCode.expires_at
+            ).getTime() <= Date.now()
+        ) {
+            await pool.query(
+                `
+                UPDATE password_reset_codes
+                SET used_at = NOW()
+                WHERE id = $1
+                `,
+                [resetCode.id]
+            );
+
+            return res.status(400).json({
+                message:
+                    'El código de recuperación ha expirado.',
+                code: 'RESET_CODE_EXPIRED',
+            });
+        }
+
+        if (
+            resetCode.attempts >=
+            PASSWORD_RESET_MAX_ATTEMPTS
+        ) {
+            await pool.query(
+                `
+                UPDATE password_reset_codes
+                SET used_at = NOW()
+                WHERE id = $1
+                `,
+                [resetCode.id]
+            );
+
+            return res.status(429).json({
+                message:
+                    'Se superó el número máximo de intentos. Solicite un nuevo código.',
+                code: 'TOO_MANY_RESET_ATTEMPTS',
+            });
+        }
+
+        const submittedHash =
+            hashVerificationCode(code);
+
+        if (
+            submittedHash !==
+            resetCode.code_hash
+        ) {
+            await pool.query(
+                `
+                UPDATE password_reset_codes
+                SET attempts = attempts + 1
+                WHERE id = $1
+                `,
+                [resetCode.id]
+            );
+
+            return res.status(400).json({
+                message:
+                    'Código de recuperación incorrecto.',
+                code: 'INVALID_RESET_CODE',
+            });
+        }
+
+        const passwordHash =
+            await bcrypt.hash(
+                newPassword,
+                12
+            );
+
+        await pool.query(
+            `
+            UPDATE users
+            SET password_hash = $1
+            WHERE id = $2
+            `,
+            [
+                passwordHash,
+                user.id,
+            ]
+        );
+
+        await pool.query(
+            `
+            UPDATE password_reset_codes
+            SET used_at = NOW()
+            WHERE id = $1
+            `,
+            [resetCode.id]
+        );
+
+        return res.json({
+            ok: true,
+            message:
+                'Contraseña actualizada correctamente.',
+        });
+    } catch (error) {
+        next(error);
+    }
+});
 /*
 |--------------------------------------------------------------------------
 | AUTH - REGISTER

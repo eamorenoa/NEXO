@@ -64,6 +64,22 @@ async function verifyEmail(
     return api.verifyEmail(email, code);
 }
 
+async function forgotPassword(email: string) {
+    return api.forgotPassword(email);
+}
+
+async function resetPassword(
+    email: string,
+    code: string,
+    newPassword: string,
+) {
+    return api.resetPassword(
+        email,
+        code,
+        newPassword,
+    );
+}
+
 async function resendVerification(email: string) {
     return api.resendVerification(email);
 }
@@ -147,6 +163,8 @@ export const AuthService = {
     login,
     register,
     verifyEmail,
+    forgotPassword,
+    resetPassword,
     resendVerification,
     restoreSession,
     logout,
