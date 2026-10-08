@@ -2,6 +2,7 @@ import 'dotenv/config';
 
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pg from 'pg';
@@ -31,6 +32,45 @@ const VERIFICATION_RESEND_SECONDS = 60;
 const PASSWORD_RESET_CODE_MINUTES = 10;
 const PASSWORD_RESET_MAX_ATTEMPTS = 5;
 const PASSWORD_RESET_RESEND_SECONDS = 60;
+
+const loginRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        message:
+            'Demasiados intentos de inicio de sesión. Espere unos minutos antes de volver a intentarlo.',
+        code: 'LOGIN_RATE_LIMITED',
+    },
+});
+
+const recoveryRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        message:
+            'Demasiadas solicitudes de recuperación. Espere unos minutos antes de volver a intentarlo.',
+        code: 'RECOVERY_RATE_LIMITED',
+    },
+});
+
+const verificationRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        message:
+            'Demasiadas solicitudes de verificación. Espere unos minutos antes de volver a intentarlo.',
+        code: 'VERIFICATION_RATE_LIMITED',
+    },
+});
 
 if (!DATABASE_URL) {
     console.error('ERROR: DATABASE_URL no está configurada.');
@@ -453,7 +493,10 @@ app.get('/api/health', async (_req, res) => {
 | EDPOINTS DE AUTENTICACIÓN
 |-------------------------------------------------------------------------
 */
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post(
+    '/api/auth/forgot-password',
+    recoveryRateLimit,
+    async (req, res) => {
     try {
         const { email } = req.body;
 
@@ -518,7 +561,10 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 | EDPOINTS DE RECUPERACION DE CONTRASEÑA
 |-------------------------------------------------------------------------
 */
-app.post('/api/auth/reset-password', async (req, res, next) => {
+app.post(
+    '/api/auth/reset-password',
+    recoveryRateLimit,
+    async (req, res, next) => {
     try {
         const email = String(
             req.body.email || ''
@@ -831,6 +877,7 @@ app.post('/api/auth/register', async (req, res, next) => {
 
 app.post(
     '/api/auth/verify-email',
+    verificationRateLimit,
     async (req, res, next) => {
         try {
             const email = String(
@@ -1017,6 +1064,7 @@ app.post(
 
 app.post(
     '/api/auth/resend-verification',
+    verificationRateLimit,
     async (req, res, next) => {
         try {
             const email = String(
@@ -1121,7 +1169,10 @@ app.post(
 |--------------------------------------------------------------------------
 */
 
-app.post('/api/auth/login', async (req, res, next) => {
+app.post(
+    '/api/auth/login',
+    loginRateLimit,
+    async (req, res, next) => {
     try {
         const email = String(
             req.body.email || ''
