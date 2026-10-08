@@ -72,6 +72,18 @@ const verificationRateLimit = rateLimit({
     },
 });
 
+const registerRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        message:
+            'Demasiados intentos de registro. Espere unos minutos antes de volver a intentarlo.',
+        code: 'REGISTER_RATE_LIMITED',
+    },
+});
 if (!DATABASE_URL) {
     console.error('ERROR: DATABASE_URL no está configurada.');
     process.exit(1);
@@ -769,56 +781,59 @@ app.post(
 |--------------------------------------------------------------------------
 */
 
-app.post('/api/auth/register', async (req, res, next) => {
-    try {
-        const name = String(
-            req.body.name || ''
-        ).trim();
+app.post(
+    '/api/auth/register',
+    registerRateLimit,
+    async (req, res, next) => {
+        try {
+            const name = String(
+                req.body.name || ''
+            ).trim();
 
-        const email = String(
-            req.body.email || ''
-        )
-            .trim()
-            .toLowerCase();
+            const email = String(
+                req.body.email || ''
+            )
+                .trim()
+                .toLowerCase();
 
-        const password = String(
-            req.body.password || ''
-        );
+            const password = String(
+                req.body.password || ''
+            );
 
-        if (name.length < 3) {
-            return res.status(400).json({
-                message:
-                    'El nombre debe tener al menos 3 caracteres',
-                code: 'INVALID_NAME',
-            });
-        }
+            if (name.length < 3) {
+                return res.status(400).json({
+                    message:
+                        'El nombre debe tener al menos 3 caracteres',
+                    code: 'INVALID_NAME',
+                });
+            }
 
-        if (
-            !email.includes('@') ||
-            email.length > 150
-        ) {
-            return res.status(400).json({
-                message:
-                    'Correo electrónico inválido',
-                code: 'INVALID_EMAIL',
-            });
-        }
+            if (
+                !email.includes('@') ||
+                email.length > 150
+            ) {
+                return res.status(400).json({
+                    message:
+                        'Correo electrónico inválido',
+                    code: 'INVALID_EMAIL',
+                });
+            }
 
-        if (password.length < 8) {
-            return res.status(400).json({
-                message:
-                    'La contraseña debe tener al menos 8 caracteres',
-                code: 'INVALID_PASSWORD',
-            });
-        }
+            if (password.length < 8) {
+                return res.status(400).json({
+                    message:
+                        'La contraseña debe tener al menos 8 caracteres',
+                    code: 'INVALID_PASSWORD',
+                });
+            }
 
-        const hash = await bcrypt.hash(
-            password,
-            12
-        );
+            const hash = await bcrypt.hash(
+                password,
+                12
+            );
 
-        const { rows } = await pool.query(
-            `
+            const { rows } = await pool.query(
+                `
             INSERT INTO users (
                 name,
                 email,
@@ -828,61 +843,61 @@ app.post('/api/auth/register', async (req, res, next) => {
             VALUES ($1, $2, $3, 'citizen')
             RETURNING id, name, email, role
             `,
-            [
-                name,
-                email,
-                hash,
-            ]
-        );
-
-        const user = rows[0];
-
-        const verificationCode =
-            await createEmailVerificationCode(
-                user.id
+                [
+                    name,
+                    email,
+                    hash,
+                ]
             );
 
-        let emailSent = false;
+            const user = rows[0];
 
-        try {
-            await sendVerificationEmail({
-                to: user.email,
-                name: user.name,
-                code: verificationCode,
-            });
+            const verificationCode =
+                await createEmailVerificationCode(
+                    user.id
+                );
 
-            emailSent = true;
-        } catch (emailError) {
-            console.error(
-                'No se pudo enviar el correo de verificación:',
-                emailError
-            );
-        }
+            let emailSent = false;
 
-        res.status(201).json({
-            message:
-                'Cuenta creada. Verifique su correo electrónico.',
-            verificationRequired: true,
-            emailSent,
-            user: {
-                id: String(user.id),
-                name: user.name,
-                email: user.email,
-                role: user.role,
-            },
-        });
-    } catch (error) {
-        if (error.code === '23505') {
-            return res.status(409).json({
+            try {
+                await sendVerificationEmail({
+                    to: user.email,
+                    name: user.name,
+                    code: verificationCode,
+                });
+
+                emailSent = true;
+            } catch (emailError) {
+                console.error(
+                    'No se pudo enviar el correo de verificación:',
+                    emailError
+                );
+            }
+
+            res.status(201).json({
                 message:
-                    'El correo ya está registrado',
-                code: 'EMAIL_ALREADY_EXISTS',
+                    'Cuenta creada. Verifique su correo electrónico.',
+                verificationRequired: true,
+                emailSent,
+                user: {
+                    id: String(user.id),
+                    name: user.name,
+                    email: user.email,
+                    role: user.role,
+                },
             });
-        }
+        } catch (error) {
+            if (error.code === '23505') {
+                return res.status(409).json({
+                    message:
+                        'El correo ya está registrado',
+                    code: 'EMAIL_ALREADY_EXISTS',
+                });
+            }
 
-        next(error);
-    }
-});
+            next(error);
+        }
+    });
 
 /*
 |--------------------------------------------------------------------------
