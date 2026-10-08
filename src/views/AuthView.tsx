@@ -28,6 +28,9 @@ export function AuthView({
   const [showPassword, setShowPassword] =
     useState(false);
 
+  const [showNewPassword, setShowNewPassword] =
+    useState(false);
+
   if (vm.resetPassword) {
     return (
       <View style={styles.screen}>
@@ -58,13 +61,29 @@ export function AuthView({
             onChangeText={vm.setVerificationCode}
           />
 
-          <TextInput
-            style={styles.input}
-            placeholder="Nueva contraseña"
-            secureTextEntry
-            value={vm.newPassword}
-            onChangeText={vm.setNewPassword}
-          />
+          <View style={styles.passwordContainer}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.passwordInput,
+              ]}
+              placeholder="Nueva contraseña"
+              secureTextEntry={!showNewPassword}
+              value={vm.newPassword}
+              onChangeText={vm.setNewPassword}
+            />
+
+            <Pressable
+              onPress={() =>
+                setShowNewPassword((value) => !value)
+              }
+              style={styles.showButton}
+            >
+              <Text style={styles.showText}>
+                {showNewPassword ? 'Ocultar' : 'Ver'}
+              </Text>
+            </Pressable>
+          </View>
 
           {vm.error ? (
             <Text style={styles.error}>

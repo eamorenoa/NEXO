@@ -44,9 +44,9 @@ function calculateDistance(
   const a =
     Math.sin(dLatitude / 2) * Math.sin(dLatitude / 2) +
     Math.cos((latitude1 * Math.PI) / 180) *
-      Math.cos((latitude2 * Math.PI) / 180) *
-      Math.sin(dLongitude / 2) *
-      Math.sin(dLongitude / 2);
+    Math.cos((latitude2 * Math.PI) / 180) *
+    Math.sin(dLongitude / 2) *
+    Math.sin(dLongitude / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
@@ -248,9 +248,9 @@ export function MapView() {
 
   const center = location
     ? {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      }
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    }
     : DEFAULT_LOCATION;
 
   const placesWithDistance = useMemo(() => {
@@ -337,14 +337,14 @@ export function MapView() {
                 style={[
                   styles.categoryButton,
                   active &&
-                    styles.categoryButtonActive,
+                  styles.categoryButtonActive,
                 ]}
               >
                 <Text
                   style={[
                     styles.categoryText,
                     active &&
-                      styles.categoryTextActive,
+                    styles.categoryTextActive,
                   ]}
                 >
                   {category.label}
@@ -384,14 +384,14 @@ export function MapView() {
                 style={[
                   styles.distanceButton,
                   active &&
-                    styles.distanceButtonActive,
+                  styles.distanceButtonActive,
                 ]}
               >
                 <Text
                   style={[
                     styles.distanceText,
                     active &&
-                      styles.distanceTextActive,
+                    styles.distanceTextActive,
                   ]}
                 >
                   {label}
@@ -480,10 +480,10 @@ export function MapView() {
             <Text style={styles.locationText}>
               {location
                 ? `${location.coords.latitude.toFixed(
-                    5
-                  )}, ${location.coords.longitude.toFixed(
-                    5
-                  )}`
+                  5
+                )}, ${location.coords.longitude.toFixed(
+                  5
+                )}`
                 : locationError
                   ? 'Revise el permiso de ubicación.'
                   : 'Espere un momento...'}
@@ -562,7 +562,7 @@ export function MapView() {
               style={[
                 styles.placeCard,
                 selectedPlace?.id === place.id &&
-                  styles.placeCardSelected,
+                styles.placeCardSelected,
               ]}
             >
               <View style={styles.placeIcon}>
@@ -574,10 +574,10 @@ export function MapView() {
                       : place.type === 'job'
                         ? '💼'
                         : place.type ===
-                            'donation'
+                          'donation'
                           ? '🎁'
                           : place.type ===
-                              'report'
+                            'report'
                             ? '📢'
                             : '📍'}
                 </Text>
