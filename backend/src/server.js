@@ -94,9 +94,24 @@ const pool = new Pool({
 |--------------------------------------------------------------------------
 */
 
+const corsOrigins = String(process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
 app.use(
     cors({
-        origin: true,
+        origin(origin, callback) {
+            if (!origin) {
+                return callback(null, true);
+            }
+
+            if (corsOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+
+            return callback(null, false);
+        },
         credentials: true,
     })
 );
@@ -497,64 +512,64 @@ app.post(
     '/api/auth/forgot-password',
     recoveryRateLimit,
     async (req, res) => {
-    try {
-        const { email } = req.body;
+        try {
+            const { email } = req.body;
 
-        if (!email || typeof email !== 'string') {
-            return res.status(400).json({
-                ok: false,
-                message: 'El correo electrónico es obligatorio.',
-            });
-        }
+            if (!email || typeof email !== 'string') {
+                return res.status(400).json({
+                    ok: false,
+                    message: 'El correo electrónico es obligatorio.',
+                });
+            }
 
-        const normalizedEmail = email.trim().toLowerCase();
+            const normalizedEmail = email.trim().toLowerCase();
 
-        const result = await pool.query(
-            `
+            const result = await pool.query(
+                `
             SELECT id, email, name
             FROM users
             WHERE LOWER(email) = $1
             LIMIT 1
             `,
-            [normalizedEmail]
-        );
+                [normalizedEmail]
+            );
 
-        if (result.rowCount === 0) {
+            if (result.rowCount === 0) {
+                return res.json({
+                    ok: true,
+                    message:
+                        'Si el correo está registrado, recibirá un código de recuperación.',
+                });
+            }
+
+            const user = result.rows[0];
+
+            const code = await createPasswordResetCode(user.id);
+
+            await sendPasswordResetEmail(
+                user.email,
+                user.name,
+                code
+            );
+
             return res.json({
                 ok: true,
                 message:
                     'Si el correo está registrado, recibirá un código de recuperación.',
             });
+        } catch (error) {
+            console.error(
+                'Error en forgot-password:',
+                error
+            );
+
+            return res.status(500).json({
+                ok: false,
+                message:
+                    'No fue posible procesar la solicitud.',
+            });
         }
-
-        const user = result.rows[0];
-
-        const code = await createPasswordResetCode(user.id);
-
-        await sendPasswordResetEmail(
-            user.email,
-            user.name,
-            code
-        );
-
-        return res.json({
-            ok: true,
-            message:
-                'Si el correo está registrado, recibirá un código de recuperación.',
-        });
-    } catch (error) {
-        console.error(
-            'Error en forgot-password:',
-            error
-        );
-
-        return res.status(500).json({
-            ok: false,
-            message:
-                'No fue posible procesar la solicitud.',
-        });
-    }
-});
+    });
 
 /*
 |--------------------------------------------------------------------------
@@ -565,65 +580,65 @@ app.post(
     '/api/auth/reset-password',
     recoveryRateLimit,
     async (req, res, next) => {
-    try {
-        const email = String(
-            req.body.email || ''
-        )
-            .trim()
-            .toLowerCase();
+        try {
+            const email = String(
+                req.body.email || ''
+            )
+                .trim()
+                .toLowerCase();
 
-        const code = String(
-            req.body.code || ''
-        ).trim();
+            const code = String(
+                req.body.code || ''
+            ).trim();
 
-        const newPassword = String(
-            req.body.newPassword || ''
-        );
+            const newPassword = String(
+                req.body.newPassword || ''
+            );
 
-        if (
-            !email ||
-            !/^\d{6}$/.test(code) ||
-            !newPassword
-        ) {
-            return res.status(400).json({
-                message:
-                    'Correo, código y nueva contraseña son obligatorios.',
-                code: 'INVALID_RESET_DATA',
-            });
-        }
+            if (
+                !email ||
+                !/^\d{6}$/.test(code) ||
+                !newPassword
+            ) {
+                return res.status(400).json({
+                    message:
+                        'Correo, código y nueva contraseña son obligatorios.',
+                    code: 'INVALID_RESET_DATA',
+                });
+            }
 
-        if (newPassword.length < 8) {
-            return res.status(400).json({
-                message:
-                    'La nueva contraseña debe tener al menos 8 caracteres.',
-                code: 'INVALID_PASSWORD',
-            });
-        }
+            if (newPassword.length < 8) {
+                return res.status(400).json({
+                    message:
+                        'La nueva contraseña debe tener al menos 8 caracteres.',
+                    code: 'INVALID_PASSWORD',
+                });
+            }
 
-        const { rows: userRows } =
-            await pool.query(
-                `
+            const { rows: userRows } =
+                await pool.query(
+                    `
                 SELECT id
                 FROM users
                 WHERE LOWER(email) = LOWER($1)
                 LIMIT 1
                 `,
-                [email]
-            );
+                    [email]
+                );
 
-        const user = userRows[0];
+            const user = userRows[0];
 
-        if (!user) {
-            return res.status(400).json({
-                message:
-                    'Código de recuperación no válido.',
-                code: 'INVALID_RESET_CODE',
-            });
-        }
+            if (!user) {
+                return res.status(400).json({
+                    message:
+                        'Código de recuperación no válido.',
+                    code: 'INVALID_RESET_CODE',
+                });
+            }
 
-        const { rows: codeRows } =
-            await pool.query(
-                `
+            const { rows: codeRows } =
+                await pool.query(
+                    `
                 SELECT
                     id,
                     code_hash,
@@ -635,119 +650,119 @@ app.post(
                 ORDER BY created_at DESC
                 LIMIT 1
                 `,
-                [user.id]
-            );
+                    [user.id]
+                );
 
-        const resetCode = codeRows[0];
+            const resetCode = codeRows[0];
 
-        if (!resetCode) {
-            return res.status(400).json({
-                message:
-                    'No existe un código de recuperación activo.',
-                code: 'NO_ACTIVE_RESET_CODE',
-            });
-        }
+            if (!resetCode) {
+                return res.status(400).json({
+                    message:
+                        'No existe un código de recuperación activo.',
+                    code: 'NO_ACTIVE_RESET_CODE',
+                });
+            }
 
-        if (
-            new Date(
-                resetCode.expires_at
-            ).getTime() <= Date.now()
-        ) {
-            await pool.query(
-                `
+            if (
+                new Date(
+                    resetCode.expires_at
+                ).getTime() <= Date.now()
+            ) {
+                await pool.query(
+                    `
                 UPDATE password_reset_codes
                 SET used_at = NOW()
                 WHERE id = $1
                 `,
-                [resetCode.id]
-            );
+                    [resetCode.id]
+                );
 
-            return res.status(400).json({
-                message:
-                    'El código de recuperación ha expirado.',
-                code: 'RESET_CODE_EXPIRED',
-            });
-        }
+                return res.status(400).json({
+                    message:
+                        'El código de recuperación ha expirado.',
+                    code: 'RESET_CODE_EXPIRED',
+                });
+            }
 
-        if (
-            resetCode.attempts >=
-            PASSWORD_RESET_MAX_ATTEMPTS
-        ) {
-            await pool.query(
-                `
+            if (
+                resetCode.attempts >=
+                PASSWORD_RESET_MAX_ATTEMPTS
+            ) {
+                await pool.query(
+                    `
                 UPDATE password_reset_codes
                 SET used_at = NOW()
                 WHERE id = $1
                 `,
-                [resetCode.id]
-            );
+                    [resetCode.id]
+                );
 
-            return res.status(429).json({
-                message:
-                    'Se superó el número máximo de intentos. Solicite un nuevo código.',
-                code: 'TOO_MANY_RESET_ATTEMPTS',
-            });
-        }
+                return res.status(429).json({
+                    message:
+                        'Se superó el número máximo de intentos. Solicite un nuevo código.',
+                    code: 'TOO_MANY_RESET_ATTEMPTS',
+                });
+            }
 
-        const submittedHash =
-            hashVerificationCode(code);
+            const submittedHash =
+                hashVerificationCode(code);
 
-        if (
-            submittedHash !==
-            resetCode.code_hash
-        ) {
-            await pool.query(
-                `
+            if (
+                submittedHash !==
+                resetCode.code_hash
+            ) {
+                await pool.query(
+                    `
                 UPDATE password_reset_codes
                 SET attempts = attempts + 1
                 WHERE id = $1
                 `,
-                [resetCode.id]
-            );
+                    [resetCode.id]
+                );
 
-            return res.status(400).json({
-                message:
-                    'Código de recuperación incorrecto.',
-                code: 'INVALID_RESET_CODE',
-            });
-        }
+                return res.status(400).json({
+                    message:
+                        'Código de recuperación incorrecto.',
+                    code: 'INVALID_RESET_CODE',
+                });
+            }
 
-        const passwordHash =
-            await bcrypt.hash(
-                newPassword,
-                12
-            );
+            const passwordHash =
+                await bcrypt.hash(
+                    newPassword,
+                    12
+                );
 
-        await pool.query(
-            `
+            await pool.query(
+                `
             UPDATE users
             SET password_hash = $1
             WHERE id = $2
             `,
-            [
-                passwordHash,
-                user.id,
-            ]
-        );
+                [
+                    passwordHash,
+                    user.id,
+                ]
+            );
 
-        await pool.query(
-            `
+            await pool.query(
+                `
             UPDATE password_reset_codes
             SET used_at = NOW()
             WHERE id = $1
             `,
-            [resetCode.id]
-        );
+                [resetCode.id]
+            );
 
-        return res.json({
-            ok: true,
-            message:
-                'Contraseña actualizada correctamente.',
-        });
-    } catch (error) {
-        next(error);
-    }
-});
+            return res.json({
+                ok: true,
+                message:
+                    'Contraseña actualizada correctamente.',
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
 /*
 |--------------------------------------------------------------------------
 | AUTH - REGISTER
@@ -1173,27 +1188,27 @@ app.post(
     '/api/auth/login',
     loginRateLimit,
     async (req, res, next) => {
-    try {
-        const email = String(
-            req.body.email || ''
-        )
-            .trim()
-            .toLowerCase();
+        try {
+            const email = String(
+                req.body.email || ''
+            )
+                .trim()
+                .toLowerCase();
 
-        const password = String(
-            req.body.password || ''
-        );
+            const password = String(
+                req.body.password || ''
+            );
 
-        if (!email || !password) {
-            return res.status(400).json({
-                message:
-                    'Correo y contraseña son obligatorios',
-                code: 'MISSING_CREDENTIALS',
-            });
-        }
+            if (!email || !password) {
+                return res.status(400).json({
+                    message:
+                        'Correo y contraseña son obligatorios',
+                    code: 'MISSING_CREDENTIALS',
+                });
+            }
 
-        const { rows } = await pool.query(
-            `
+            const { rows } = await pool.query(
+                `
             SELECT
                 id,
                 name,
@@ -1206,82 +1221,82 @@ app.post(
             WHERE LOWER(email) = LOWER($1)
             LIMIT 1
             `,
-            [email]
-        );
-
-        const user = rows[0];
-
-        if (!user) {
-            return res.status(401).json({
-                message:
-                    'Credenciales incorrectas',
-                code: 'INVALID_CREDENTIALS',
-            });
-        }
-
-        const passwordValid =
-            await bcrypt.compare(
-                password,
-                user.password_hash
+                [email]
             );
 
-        if (!passwordValid) {
-            return res.status(401).json({
-                message:
-                    'Credenciales incorrectas',
-                code: 'INVALID_CREDENTIALS',
-            });
-        }
+            const user = rows[0];
 
-        if (!user.active) {
-            return res.status(403).json({
-                message:
-                    'La cuenta está desactivada',
-                code: 'USER_INACTIVE',
-            });
-        }
+            if (!user) {
+                return res.status(401).json({
+                    message:
+                        'Credenciales incorrectas',
+                    code: 'INVALID_CREDENTIALS',
+                });
+            }
 
-        if (!user.email_verified) {
-            return res.status(403).json({
-                message:
-                    'Debe verificar su correo electrónico antes de iniciar sesión.',
-                code: 'EMAIL_NOT_VERIFIED',
-                requiresVerification: true,
+            const passwordValid =
+                await bcrypt.compare(
+                    password,
+                    user.password_hash
+                );
+
+            if (!passwordValid) {
+                return res.status(401).json({
+                    message:
+                        'Credenciales incorrectas',
+                    code: 'INVALID_CREDENTIALS',
+                });
+            }
+
+            if (!user.active) {
+                return res.status(403).json({
+                    message:
+                        'La cuenta está desactivada',
+                    code: 'USER_INACTIVE',
+                });
+            }
+
+            if (!user.email_verified) {
+                return res.status(403).json({
+                    message:
+                        'Debe verificar su correo electrónico antes de iniciar sesión.',
+                    code: 'EMAIL_NOT_VERIFIED',
+                    requiresVerification: true,
+                    email: user.email,
+                });
+            }
+
+            const payload = {
+                id: String(user.id),
+                name: user.name,
                 email: user.email,
+                role: user.role,
+            };
+
+            const accessToken =
+                createAccessToken(payload);
+
+            const deviceName = String(
+                req.body.deviceName ||
+                'NEXO Mobile'
+            ).slice(0, 120);
+
+            const refreshToken =
+                await createRefreshSession(
+                    user.id,
+                    deviceName
+                );
+
+            res.json({
+                accessToken,
+                refreshToken,
+                expiresIn: 900,
+                user: payload,
             });
+        } catch (error) {
+            next(error);
         }
-
-        const payload = {
-            id: String(user.id),
-            name: user.name,
-            email: user.email,
-            role: user.role,
-        };
-
-        const accessToken =
-            createAccessToken(payload);
-
-        const deviceName = String(
-            req.body.deviceName ||
-            'NEXO Mobile'
-        ).slice(0, 120);
-
-        const refreshToken =
-            await createRefreshSession(
-                user.id,
-                deviceName
-            );
-
-        res.json({
-            accessToken,
-            refreshToken,
-            expiresIn: 900,
-            user: payload,
-        });
-    } catch (error) {
-        next(error);
-    }
-});
+    });
 
 /*
 |--------------------------------------------------------------------------

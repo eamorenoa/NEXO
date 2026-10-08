@@ -39,10 +39,11 @@ services:
       PORT: 3000
 
       # PostgreSQL
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nexo}
-
-      # JWT
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nexo} # JWT
       JWT_SECRET: ${JWT_SECRET}
+
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8081}
 
       # OpenAI
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
