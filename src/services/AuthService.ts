@@ -13,23 +13,32 @@ export interface Session {
 }
 
 async function saveSession(response: AuthResponse): Promise<Session> {
-    await SessionStorage.setItem(
-        ACCESS_TOKEN_KEY,
-        response.accessToken,
-    );
+    if (
+        typeof response?.accessToken !== 'string' ||
+        !response.accessToken ||
+        typeof response?.refreshToken !== 'string' ||
+        !response.refreshToken
+    ) {
+        throw new Error('La respuesta de autenticación no contiene tokens válidos.');
+    }
 
-    await SessionStorage.setItem(
-        REFRESH_TOKEN_KEY,
-        response.refreshToken,
-    );
+    let user = response.user;
 
-    await SessionStorage.setItem(
-        USER_KEY,
-        JSON.stringify(response.user),
-    );
+    if (!user) {
+        const currentUser = await api.me(response.accessToken);
+        user = currentUser.user;
+    }
+
+    if (!user || typeof user !== 'object' || !user.id) {
+        throw new Error('No se recibió un usuario válido al restaurar la sesión.');
+    }
+
+    await SessionStorage.setItem(ACCESS_TOKEN_KEY, response.accessToken);
+    await SessionStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
+    await SessionStorage.setItem(USER_KEY, JSON.stringify(user));
 
     return {
-        user: response.user,
+        user,
         accessToken: response.accessToken,
         refreshToken: response.refreshToken,
     };
