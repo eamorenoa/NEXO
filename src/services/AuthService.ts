@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import { SessionStorage } from './SessionStorage';
 import { api, AuthResponse } from './api';
 import { User } from '../models/User';
 
@@ -13,17 +13,17 @@ export interface Session {
 }
 
 async function saveSession(response: AuthResponse): Promise<Session> {
-    await SecureStore.setItemAsync(
+    await SessionStorage.setItem(
         ACCESS_TOKEN_KEY,
         response.accessToken,
     );
 
-    await SecureStore.setItemAsync(
+    await SessionStorage.setItem(
         REFRESH_TOKEN_KEY,
         response.refreshToken,
     );
 
-    await SecureStore.setItemAsync(
+    await SessionStorage.setItem(
         USER_KEY,
         JSON.stringify(response.user),
     );
@@ -36,9 +36,9 @@ async function saveSession(response: AuthResponse): Promise<Session> {
 }
 
 async function clearSession() {
-    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
-    await SecureStore.deleteItemAsync(USER_KEY);
+    await SessionStorage.deleteItem(ACCESS_TOKEN_KEY);
+    await SessionStorage.deleteItem(REFRESH_TOKEN_KEY);
+    await SessionStorage.deleteItem(USER_KEY);
 }
 
 async function login(
@@ -86,13 +86,13 @@ async function resendVerification(email: string) {
 
 async function restoreSession(): Promise<Session | null> {
     const accessToken =
-        await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
+        await SessionStorage.getItem(ACCESS_TOKEN_KEY);
 
     const refreshToken =
-        await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+        await SessionStorage.getItem(REFRESH_TOKEN_KEY);
 
     const storedUser =
-        await SecureStore.getItemAsync(USER_KEY);
+        await SessionStorage.getItem(USER_KEY);
 
     if (!accessToken || !refreshToken) {
         return null;
@@ -103,7 +103,7 @@ async function restoreSession(): Promise<Session | null> {
 
         const user = response.user;
 
-        await SecureStore.setItemAsync(
+        await SessionStorage.setItem(
             USER_KEY,
             JSON.stringify(user),
         );
@@ -127,7 +127,7 @@ async function restoreSession(): Promise<Session | null> {
 
 async function logout() {
     const refreshToken =
-        await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+        await SessionStorage.getItem(REFRESH_TOKEN_KEY);
 
     try {
         if (refreshToken) {
@@ -142,7 +142,7 @@ async function logout() {
 
 async function getStoredUser(): Promise<User | null> {
     const storedUser =
-        await SecureStore.getItemAsync(USER_KEY);
+        await SessionStorage.getItem(USER_KEY);
 
     if (!storedUser) {
         return null;
@@ -156,7 +156,7 @@ async function getStoredUser(): Promise<User | null> {
 }
 
 async function getAccessToken(): Promise<string | null> {
-    return SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
+    return SessionStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
 export const AuthService = {

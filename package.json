@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "expo": "^57.0.24",
-    "expo-location": "~57.0.19",
+    "expo": "~57.0.27",
+    "expo-location": "~57.0.20",
     "expo-secure-store": "~57.0.4",
     "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
@@ -21,7 +21,8 @@
     "react-native": "0.86.3",
     "react-native-maps": "1.27.2",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-web": "^0.21.0"
+    "react-native-web": "^0.21.0",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@types/babel__generator": "^7.27.0",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import NativeMapView, { Marker, Region } from 'react-native-maps';
+import WebView from 'react-native-webview';
 import * as Location from 'expo-location';
 
 import { useMapViewModel } from '../viewmodels/useMapViewModel';
@@ -37,16 +37,14 @@ function calculateDistance(
   longitude2: number
 ) {
   const earthRadius = 6371;
-
   const dLatitude = ((latitude2 - latitude1) * Math.PI) / 180;
   const dLongitude = ((longitude2 - longitude1) * Math.PI) / 180;
 
   const a =
-    Math.sin(dLatitude / 2) * Math.sin(dLatitude / 2) +
+    Math.sin(dLatitude / 2) ** 2 +
     Math.cos((latitude1 * Math.PI) / 180) *
     Math.cos((latitude2 * Math.PI) / 180) *
-    Math.sin(dLongitude / 2) *
-    Math.sin(dLongitude / 2);
+    Math.sin(dLongitude / 2) ** 2;
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
@@ -65,19 +63,14 @@ function getCategoryLabel(type: string) {
   switch (type) {
     case 'help':
       return 'Ayuda';
-
     case 'service':
       return 'Servicios';
-
     case 'job':
       return 'Empleo';
-
     case 'donation':
       return 'Donaciones';
-
     case 'report':
       return 'Reportes';
-
     default:
       return 'Lugar';
   }
@@ -86,32 +79,34 @@ function getCategoryLabel(type: string) {
 function WebMap({
   places,
   center,
+  hasLocation,
 }: {
   places: any[];
   center: {
     latitude: number;
     longitude: number;
   };
+  hasLocation: boolean;
 }) {
   const html = useMemo(() => {
     const markers = JSON.stringify(
       places.map((place) => ({
-        lat: place.latitude,
-        lng: place.longitude,
-        name: place.name,
-        description: place.description || '',
+        lat: Number(place.latitude),
+        lng: Number(place.longitude),
+        name: String(place.name ?? ''),
+        description: String(place.description ?? ''),
       }))
     );
 
+    // Evita que los datos puedan cerrar prematuramente la etiqueta script.
+    const safeMarkers = markers.replace(/</g, '\\u003c');
+
     return `
       <!doctype html>
-
-      <html>
+      <html lang="es">
         <head>
-          <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1"
-          />
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
 
           <link
             rel="stylesheet"
@@ -119,16 +114,30 @@ function WebMap({
           />
 
           <style>
-            html,
-            body,
-            #map {
+            html, body, #map {
               height: 100%;
+              width: 100%;
               margin: 0;
               padding: 0;
             }
 
             body {
               font-family: Arial, sans-serif;
+            }
+
+            .nexo-user-location {
+              background: transparent;
+              border: 0;
+            }
+
+            .nexo-user-location-dot {
+              width: 20px;
+              height: 20px;
+              box-sizing: border-box;
+              background: #2583ff;
+              border: 3px solid #fff;
+              border-radius: 50%;
+              box-shadow: 0 0 0 8px rgba(37, 131, 255, 0.20);
             }
           </style>
         </head>
@@ -149,39 +158,88 @@ function WebMap({
             L.tileLayer(
               'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
               {
-                attribution: '© OpenStreetMap'
+                attribution: '&copy; OpenStreetMap contributors',
+                maxZoom: 19
               }
             ).addTo(map);
 
-            const places = ${markers};
+            // Marcador azul para la ubicación actual del usuario.
+            if (${hasLocation}) {
+              const userIcon = L.divIcon({
+                className: 'nexo-user-location',
+                html: '<div class="nexo-user-location-dot"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+              });
 
-            places.forEach(place => {
-              L.marker([
-                place.lat,
-                place.lng
-              ])
+              L.marker(center, {
+                icon: userIcon,
+                zIndexOffset: 1000
+              })
                 .addTo(map)
-                .bindPopup(
-                  '<b>' +
-                  place.name +
-                  '</b><br>' +
-                  place.description
-                );
+                .bindPopup('Su ubicación actual');
+            }
+
+            // Marcadores de los lugares comunitarios.
+            const places = ${safeMarkers};
+
+            places.forEach((place) => {
+              if (
+                !Number.isFinite(place.lat) ||
+                !Number.isFinite(place.lng)
+              ) {
+                return;
+              }
+
+              const popup = document.createElement('div');
+              const title = document.createElement('strong');
+
+              title.textContent = place.name;
+              popup.appendChild(title);
+
+              if (place.description) {
+                popup.appendChild(document.createElement('br'));
+
+                const description = document.createElement('span');
+                description.textContent = place.description;
+                popup.appendChild(description);
+              }
+
+              L.marker([place.lat, place.lng])
+                .addTo(map)
+                .bindPopup(popup);
             });
           </script>
         </body>
       </html>
     `;
-  }, [places, center]);
+  }, [places, center.latitude, center.longitude, hasLocation]);
+
+  if (Platform.OS === 'web') {
+    return (
+      <iframe
+        title="Mapa NEXO"
+        srcDoc={html}
+        style={{
+          width: '100%',
+          height: '100%',
+          border: 0,
+        }}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+      />
+    );
+  }
 
   return (
-    <iframe
-      title="Mapa NEXO"
-      srcDoc={html}
+    <WebView
+      originWhitelist={['*']}
+      source={{ html }}
+      javaScriptEnabled
+      domStorageEnabled
       style={{
         width: '100%',
         height: '100%',
-        border: 0,
       }}
     />
   );
@@ -190,28 +248,21 @@ function WebMap({
 export function MapView() {
   const vm = useMapViewModel();
 
-  const mapRef = useRef<NativeMapView>(null);
-
   const [location, setLocation] =
     useState<Location.LocationObject | null>(null);
 
-  const [locationError, setLocationError] =
-    useState(false);
-
-  const [selectedCategory, setSelectedCategory] =
-    useState('all');
-
-  const [maxDistance, setMaxDistance] =
-    useState(2);
-
-  const [selectedPlace, setSelectedPlace] =
-    useState<any | null>(null);
+  const [locationError, setLocationError] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [maxDistance, setMaxDistance] = useState(2);
+  const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
 
   useEffect(() => {
-    getCurrentLocation();
+    void getCurrentLocation();
   }, []);
 
   async function getCurrentLocation() {
+    setLocationError(false);
+
     try {
       const permission =
         await Location.requestForegroundPermissionsAsync();
@@ -221,27 +272,13 @@ export function MapView() {
         return;
       }
 
-      const current =
-        await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
 
       setLocation(current);
-
-      const region: Region = {
-        latitude: current.coords.latitude,
-        longitude: current.coords.longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      };
-
-      mapRef.current?.animateToRegion(region, 1000);
     } catch (error) {
-      console.log(
-        'Error obteniendo ubicación:',
-        error
-      );
-
+      console.error('Error obteniendo ubicación:', error);
       setLocationError(true);
     }
   }
@@ -276,23 +313,12 @@ export function MapView() {
           selectedCategory === 'all' ||
           place.type === selectedCategory;
 
-        const distanceMatches =
-          place.distance <= maxDistance;
+        const distanceMatches = place.distance <= maxDistance;
 
-        return (
-          categoryMatches &&
-          distanceMatches
-        );
+        return categoryMatches && distanceMatches;
       })
-      .sort(
-        (a: any, b: any) =>
-          a.distance - b.distance
-      );
-  }, [
-    placesWithDistance,
-    selectedCategory,
-    maxDistance,
-  ]);
+      .sort((a: any, b: any) => a.distance - b.distance);
+  }, [placesWithDistance, selectedCategory, maxDistance]);
 
   return (
     <View style={styles.container}>
@@ -300,20 +326,14 @@ export function MapView() {
         style={styles.scroll}
         contentContainerStyle={styles.content}
       >
-        <Text style={styles.title}>
-          Mapa comunitario
-        </Text>
+        <Text style={styles.title}>Mapa comunitario</Text>
 
         <Text style={styles.subtitle}>
-          Encuentre ayuda, servicios y oportunidades
-          cerca de usted.
+          Encuentre ayuda, servicios y oportunidades cerca de usted.
         </Text>
 
         {/* CATEGORÍAS */}
-
-        <Text style={styles.sectionTitle}>
-          Categoría
-        </Text>
+        <Text style={styles.sectionTitle}>Categoría</Text>
 
         <ScrollView
           horizontal
@@ -321,30 +341,24 @@ export function MapView() {
           style={styles.horizontalScroll}
         >
           {CATEGORIES.map((category) => {
-            const active =
-              selectedCategory === category.key;
+            const active = selectedCategory === category.key;
 
             return (
               <Pressable
                 key={category.key}
                 onPress={() => {
-                  setSelectedCategory(
-                    category.key
-                  );
-
+                  setSelectedCategory(category.key);
                   setSelectedPlace(null);
                 }}
                 style={[
                   styles.categoryButton,
-                  active &&
-                  styles.categoryButtonActive,
+                  active && styles.categoryButtonActive,
                 ]}
               >
                 <Text
                   style={[
                     styles.categoryText,
-                    active &&
-                    styles.categoryTextActive,
+                    active && styles.categoryTextActive,
                   ]}
                 >
                   {category.label}
@@ -354,11 +368,8 @@ export function MapView() {
           })}
         </ScrollView>
 
-        {/* DISTANCIA */}
-
-        <Text style={styles.sectionTitle}>
-          Buscar lugares en
-        </Text>
+        {/* FILTRO DE DISTANCIA */}
+        <Text style={styles.sectionTitle}>Buscar lugares en</Text>
 
         <ScrollView
           horizontal
@@ -366,8 +377,7 @@ export function MapView() {
           style={styles.horizontalScroll}
         >
           {DISTANCES.map((distance) => {
-            const active =
-              maxDistance === distance;
+            const active = maxDistance === distance;
 
             const label =
               distance < 1
@@ -383,15 +393,13 @@ export function MapView() {
                 }}
                 style={[
                   styles.distanceButton,
-                  active &&
-                  styles.distanceButtonActive,
+                  active && styles.distanceButtonActive,
                 ]}
               >
                 <Text
                   style={[
                     styles.distanceText,
-                    active &&
-                    styles.distanceTextActive,
+                    active && styles.distanceTextActive,
                   ]}
                 >
                   {label}
@@ -402,70 +410,18 @@ export function MapView() {
         </ScrollView>
 
         {/* MAPA */}
-
         <View style={styles.mapContainer}>
-          {Platform.OS === 'web' ? (
-            <WebMap
-              places={filteredPlaces}
-              center={center}
-            />
-          ) : (
-            <NativeMapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={{
-                ...center,
-                latitudeDelta: 0.02,
-                longitudeDelta: 0.02,
-              }}
-              showsUserLocation
-              showsMyLocationButton
-              onPress={() =>
-                setSelectedPlace(null)
-              }
-            >
-              {location && (
-                <Marker
-                  coordinate={center}
-                  title="Usted está aquí"
-                  description="Su ubicación actual"
-                />
-              )}
-
-              {filteredPlaces.map(
-                (place: any) => (
-                  <Marker
-                    key={String(place.id)}
-                    coordinate={{
-                      latitude:
-                        Number(place.latitude),
-                      longitude:
-                        Number(place.longitude),
-                    }}
-                    title={place.name}
-                    description={
-                      place.description ||
-                      getCategoryLabel(
-                        place.type
-                      )
-                    }
-                    onPress={() =>
-                      setSelectedPlace(place)
-                    }
-                  />
-                )
-              )}
-            </NativeMapView>
-          )}
+          <WebMap
+            places={filteredPlaces}
+            center={center}
+            hasLocation={location !== null}
+          />
         </View>
 
         {/* ESTADO DE UBICACIÓN */}
-
         <View style={styles.locationCard}>
           <View style={styles.locationIcon}>
-            <Text style={styles.locationIconText}>
-              📍
-            </Text>
+            <Text style={styles.locationIconText}>📍</Text>
           </View>
 
           <View style={styles.locationInfo}>
@@ -479,11 +435,7 @@ export function MapView() {
 
             <Text style={styles.locationText}>
               {location
-                ? `${location.coords.latitude.toFixed(
-                  5
-                )}, ${location.coords.longitude.toFixed(
-                  5
-                )}`
+                ? `${location.coords.latitude.toFixed(5)}, ${location.coords.longitude.toFixed(5)}`
                 : locationError
                   ? 'Revise el permiso de ubicación.'
                   : 'Espere un momento...'}
@@ -491,34 +443,28 @@ export function MapView() {
           </View>
 
           <Pressable
-            onPress={getCurrentLocation}
+            onPress={() => void getCurrentLocation()}
             style={styles.refreshButton}
           >
-            <Text style={styles.refreshText}>
-              Actualizar
-            </Text>
+            <Text style={styles.refreshText}>Actualizar</Text>
           </Pressable>
         </View>
 
         {/* RESULTADOS */}
-
         <View style={styles.resultsHeader}>
           <View>
-            <Text style={styles.resultsTitle}>
-              Lugares cercanos
-            </Text>
+            <Text style={styles.resultsTitle}>Lugares cercanos</Text>
 
             <Text style={styles.resultsSubtitle}>
-              Hasta {maxDistance < 1
+              Hasta{' '}
+              {maxDistance < 1
                 ? `${maxDistance * 1000} metros`
                 : `${maxDistance} km`}
             </Text>
           </View>
 
           {vm.loading && (
-            <ActivityIndicator
-              color={colors.primary}
-            />
+            <ActivityIndicator color={colors.primary} />
           )}
         </View>
 
@@ -528,9 +474,7 @@ export function MapView() {
               No se pudieron cargar los lugares
             </Text>
 
-            <Text style={styles.errorText}>
-              {vm.error}
-            </Text>
+            <Text style={styles.errorText}>{vm.error}</Text>
 
             <Pressable
               onPress={vm.reload}
@@ -548,17 +492,14 @@ export function MapView() {
             </Text>
 
             <Text style={styles.emptyText}>
-              Pruebe aumentando la distancia o
-              seleccionando otra categoría.
+              Pruebe aumentando la distancia o seleccionando otra categoría.
             </Text>
           </View>
         ) : (
           filteredPlaces.map((place: any) => (
             <Pressable
               key={String(place.id)}
-              onPress={() =>
-                setSelectedPlace(place)
-              }
+              onPress={() => setSelectedPlace(place)}
               style={[
                 styles.placeCard,
                 selectedPlace?.id === place.id &&
@@ -573,27 +514,19 @@ export function MapView() {
                       ? '🏥'
                       : place.type === 'job'
                         ? '💼'
-                        : place.type ===
-                          'donation'
+                        : place.type === 'donation'
                           ? '🎁'
-                          : place.type ===
-                            'report'
+                          : place.type === 'report'
                             ? '📢'
                             : '📍'}
                 </Text>
               </View>
 
               <View style={styles.placeInfo}>
-                <Text style={styles.placeName}>
-                  {place.name}
-                </Text>
+                <Text style={styles.placeName}>{place.name}</Text>
 
-                <Text
-                  style={styles.placeCategory}
-                >
-                  {getCategoryLabel(
-                    place.type
-                  )}
+                <Text style={styles.placeCategory}>
+                  {getCategoryLabel(place.type)}
                 </Text>
 
                 {place.description && (
@@ -607,20 +540,15 @@ export function MapView() {
               </View>
 
               <View style={styles.distanceBadge}>
-                <Text
-                  style={styles.distanceBadgeText}
-                >
-                  {formatDistance(
-                    place.distance
-                  )}
+                <Text style={styles.distanceBadgeText}>
+                  {formatDistance(place.distance)}
                 </Text>
               </View>
             </Pressable>
           ))
         )}
 
-        {/* DETALLE */}
-
+        {/* DETALLE DEL LUGAR SELECCIONADO */}
         {selectedPlace && (
           <View style={styles.detailCard}>
             <View style={styles.detailHeader}>
@@ -630,47 +558,31 @@ export function MapView() {
                 </Text>
 
                 <Text style={styles.detailCategory}>
-                  {getCategoryLabel(
-                    selectedPlace.type
-                  )}
+                  {getCategoryLabel(selectedPlace.type)}
                 </Text>
               </View>
 
               <Pressable
-                onPress={() =>
-                  setSelectedPlace(null)
-                }
+                onPress={() => setSelectedPlace(null)}
                 style={styles.closeButton}
               >
-                <Text
-                  style={styles.closeButtonText}
-                >
-                  ×
-                </Text>
+                <Text style={styles.closeButtonText}>×</Text>
               </Pressable>
             </View>
 
             {selectedPlace.description && (
-              <Text
-                style={styles.detailDescription}
-              >
+              <Text style={styles.detailDescription}>
                 {selectedPlace.description}
               </Text>
             )}
 
             <View style={styles.detailDistance}>
-              <Text
-                style={styles.detailDistanceLabel}
-              >
+              <Text style={styles.detailDistanceLabel}>
                 Distancia desde usted
               </Text>
 
-              <Text
-                style={styles.detailDistanceValue}
-              >
-                {formatDistance(
-                  selectedPlace.distance
-                )}
+              <Text style={styles.detailDistanceValue}>
+                {formatDistance(selectedPlace.distance)}
               </Text>
             </View>
 
@@ -680,13 +592,9 @@ export function MapView() {
               </Text>
 
               <Text style={styles.coordinatesText}>
-                {Number(
-                  selectedPlace.latitude
-                ).toFixed(5)}
+                {Number(selectedPlace.latitude).toFixed(5)}
                 {', '}
-                {Number(
-                  selectedPlace.longitude
-                ).toFixed(5)}
+                {Number(selectedPlace.longitude).toFixed(5)}
               </Text>
             </View>
           </View>
@@ -703,29 +611,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-
   scroll: {
     flex: 1,
   },
-
   content: {
     padding: 18,
     paddingBottom: 100,
   },
-
   title: {
     color: colors.text,
     fontSize: 27,
     fontWeight: '900',
   },
-
   subtitle: {
     color: colors.muted,
     fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
   },
-
   sectionTitle: {
     color: colors.text,
     fontSize: 13,
@@ -733,11 +636,9 @@ const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 9,
   },
-
   horizontalScroll: {
     marginBottom: 2,
   },
-
   categoryButton: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -747,22 +648,18 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
   },
-
   categoryButtonActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-
   categoryText: {
     color: colors.muted,
     fontSize: 12,
     fontWeight: '700',
   },
-
   categoryTextActive: {
     color: '#FFFFFF',
   },
-
   distanceButton: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -772,22 +669,18 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
   },
-
   distanceButtonActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-
   distanceText: {
     color: colors.muted,
     fontSize: 12,
     fontWeight: '800',
   },
-
   distanceTextActive: {
     color: '#FFFFFF',
   },
-
   mapContainer: {
     height: 390,
     marginTop: 16,
@@ -797,11 +690,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-
   map: {
     flex: 1,
   },
-
   locationCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -812,7 +703,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-
   locationIcon: {
     width: 40,
     height: 40,
@@ -822,40 +712,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
-
   locationIconText: {
     fontSize: 19,
   },
-
   locationInfo: {
     flex: 1,
   },
-
   locationTitle: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '800',
   },
-
   locationText: {
     color: colors.muted,
     fontSize: 10,
     marginTop: 3,
   },
-
   refreshButton: {
     backgroundColor: colors.primarySoft,
     borderRadius: 10,
     paddingHorizontal: 9,
     paddingVertical: 8,
   },
-
   refreshText: {
     color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
   },
-
   resultsHeader: {
     marginTop: 18,
     marginBottom: 9,
@@ -863,19 +746,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-
   resultsTitle: {
     color: colors.text,
     fontSize: 17,
     fontWeight: '900',
   },
-
   resultsSubtitle: {
     color: colors.muted,
     fontSize: 11,
     marginTop: 2,
   },
-
   placeCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -886,12 +766,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-
   placeCardSelected: {
     borderColor: colors.primary,
     borderWidth: 2,
   },
-
   placeIcon: {
     width: 44,
     height: 44,
@@ -901,49 +779,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
-
   placeIconText: {
     fontSize: 20,
   },
-
   placeInfo: {
     flex: 1,
     paddingRight: 8,
   },
-
   placeName: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '800',
   },
-
   placeCategory: {
     color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
     marginTop: 3,
   },
-
   placeDescription: {
     color: colors.muted,
     fontSize: 10,
     lineHeight: 15,
     marginTop: 4,
   },
-
   distanceBadge: {
     backgroundColor: '#F3F4F6',
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 6,
   },
-
   distanceBadgeText: {
     color: colors.text,
     fontSize: 10,
     fontWeight: '800',
   },
-
   detailCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -952,30 +822,25 @@ const styles = StyleSheet.create({
     padding: 15,
     marginTop: 5,
   },
-
   detailHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
   },
-
   detailTitleContainer: {
     flex: 1,
     paddingRight: 10,
   },
-
   detailTitle: {
     color: colors.text,
     fontSize: 17,
     fontWeight: '900',
   },
-
   detailCategory: {
     color: colors.primary,
     fontSize: 11,
     fontWeight: '800',
     marginTop: 4,
   },
-
   closeButton: {
     width: 32,
     height: 32,
@@ -984,59 +849,50 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   closeButtonText: {
     color: colors.text,
     fontSize: 24,
     lineHeight: 26,
   },
-
   detailDescription: {
     color: colors.muted,
     fontSize: 12,
     lineHeight: 18,
     marginTop: 12,
   },
-
   detailDistance: {
     backgroundColor: colors.primarySoft,
     borderRadius: 12,
     padding: 11,
     marginTop: 12,
   },
-
   detailDistanceLabel: {
     color: colors.muted,
     fontSize: 10,
     fontWeight: '700',
   },
-
   detailDistanceValue: {
     color: colors.primary,
     fontSize: 17,
     fontWeight: '900',
     marginTop: 2,
   },
-
   coordinates: {
     backgroundColor: '#F7F8FA',
     borderRadius: 12,
     padding: 10,
     marginTop: 9,
   },
-
   coordinatesLabel: {
     color: colors.text,
     fontSize: 10,
     fontWeight: '800',
   },
-
   coordinatesText: {
     color: colors.muted,
     fontSize: 10,
     marginTop: 3,
   },
-
   emptyCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -1045,14 +901,12 @@ const styles = StyleSheet.create({
     padding: 18,
     alignItems: 'center',
   },
-
   emptyTitle: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '800',
     textAlign: 'center',
   },
-
   emptyText: {
     color: colors.muted,
     fontSize: 11,
@@ -1060,7 +914,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 5,
   },
-
   errorCard: {
     backgroundColor: '#FEF2F2',
     borderWidth: 1,
@@ -1068,19 +921,16 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     padding: 16,
   },
-
   errorTitle: {
     color: colors.danger,
     fontSize: 13,
     fontWeight: '800',
   },
-
   errorText: {
     color: colors.muted,
     fontSize: 11,
     marginTop: 5,
   },
-
   retryButton: {
     backgroundColor: colors.danger,
     borderRadius: 10,
@@ -1088,13 +938,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
-
   retryText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '800',
   },
-
   bottomSpace: {
     height: 30,
   },
