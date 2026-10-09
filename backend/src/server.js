@@ -1647,13 +1647,14 @@ app.get(
                     n.ai_category,
                     n.ai_confidence,
                     n.created_at,
-                    u.name AS author
+                    u.name AS author,
+                    (n.user_id = $1) AS is_owner
                 FROM needs n
                 JOIN users u
                     ON u.id = n.user_id
                 ORDER BY n.created_at DESC
                 LIMIT 50
-            `);
+            `, [req.user.id]);
 
             res.json(rows);
         } catch (error) {
@@ -1753,6 +1754,121 @@ app.post(
     }
 );
 
+
+app.patch(
+    '/api/needs/:id',
+    auth,
+    requirePermission('needs.update.own'),
+    async (req, res, next) => {
+        try {
+            const id = req.params.id;
+            const description = req.body.description;
+
+            if (
+                !/^\d+$/.test(id) ||
+                !Number.isSafeInteger(Number(id)) ||
+                Number(id) < 1
+            ) {
+                return res.status(400).json({
+                    message: 'Identificador de solicitud inválido',
+                    code: 'INVALID_NEED_ID',
+                });
+            }
+
+            if (
+                typeof description !== 'string' ||
+                description.trim().length < 5 ||
+                description.trim().length > 1000
+            ) {
+                return res.status(400).json({
+                    message: 'La descripción debe tener entre 5 y 1000 caracteres',
+                    code: 'INVALID_DESCRIPTION',
+                });
+            }
+
+            const { rows } = await pool.query(
+                `
+                UPDATE needs
+                SET description = $1
+                WHERE id = $2
+                  AND user_id = $3
+                RETURNING
+                    id,
+                    description,
+                    category,
+                    status,
+                    ai_category,
+                    ai_confidence,
+                    created_at
+                `,
+                [
+                    description.trim(),
+                    id,
+                    req.user.id,
+                ]
+            );
+
+            if (!rows.length) {
+                return res.status(404).json({
+                    message: 'Solicitud no encontrada o no tiene autorización para modificarla',
+                    code: 'NEED_NOT_FOUND',
+                });
+            }
+
+            res.json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+app.delete(
+    '/api/needs/:id',
+    auth,
+    requirePermission('needs.delete.own'),
+    async (req, res, next) => {
+        try {
+            const id = req.params.id;
+
+            if (
+                !/^\d+$/.test(id) ||
+                !Number.isSafeInteger(Number(id)) ||
+                Number(id) < 1
+            ) {
+                return res.status(400).json({
+                    message: 'Identificador de solicitud inválido',
+                    code: 'INVALID_NEED_ID',
+                });
+            }
+
+            const { rowCount } = await pool.query(
+                `
+                DELETE FROM needs
+                WHERE id = $1
+                  AND user_id = $2
+                `,
+                [
+                    id,
+                    req.user.id,
+                ]
+            );
+
+            if (!rowCount) {
+                return res.status(404).json({
+                    message: 'Solicitud no encontrada o no tiene autorización para eliminarla',
+                    code: 'NEED_NOT_FOUND',
+                });
+            }
+
+            res.json({
+                ok: true,
+                message: 'Solicitud eliminada correctamente',
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
 /*
 |--------------------------------------------------------------------------
 | COMMUNITY

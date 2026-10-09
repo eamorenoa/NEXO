@@ -175,6 +175,30 @@ export const api = {
       }),
     }),
 
+  updateNeed: (
+    token: string,
+    id: number | string,
+    description: string,
+  ) =>
+    request<Need>(`/needs/${id}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ description }),
+    }),
+
+  deleteNeed: (
+    token: string,
+    id: number | string,
+  ) =>
+    request<{ ok: boolean; message: string }>(`/needs/${id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }),
+
   community: (token: string) =>
     request<CommunityPost[]>('/community', {
       headers: {

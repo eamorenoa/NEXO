@@ -1,4 +1,11 @@
-export type NeedCategory = 'help' | 'share' | 'job' | 'report' | 'donation' | 'accessibility';
+export type NeedCategory =
+  | 'help'
+  | 'share'
+  | 'job'
+  | 'report'
+  | 'donation'
+  | 'accessibility';
+
 export type Need = {
   id: number | string;
   description: string;
@@ -8,4 +15,5 @@ export type Need = {
   ai_confidence?: number;
   author?: string;
   created_at?: string;
+  is_owner?: boolean;
 };
