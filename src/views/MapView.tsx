@@ -264,25 +264,71 @@ export function MapView() {
     setLocationError(false);
 
     try {
-      const permission =
-        await Location.requestForegroundPermissionsAsync();
+      // 1. Comprobar que el GPS o los servicios de ubicación estén activos.
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
 
-      if (permission.status !== 'granted') {
+      if (!servicesEnabled) {
+        console.warn(
+          'Los servicios de ubicación del dispositivo están desactivados.'
+        );
+
+        // Intentar recuperar una ubicación guardada recientemente.
+        const lastLocation = await Location.getLastKnownPositionAsync({
+          maxAge: 120000,
+          requiredAccuracy: 200,
+        });
+
+        if (lastLocation) {
+          setLocation(lastLocation);
+          return;
+        }
+
         setLocationError(true);
         return;
       }
 
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
+      // 2. Solicitar permiso para acceder a la ubicación.
+      const permission =
+        await Location.requestForegroundPermissionsAsync();
+
+      if (permission.status !== 'granted') {
+        console.warn('El usuario no concedió permiso de ubicación.');
+        setLocationError(true);
+        return;
+      }
+
+      // 3. Solicitar una ubicación con mayor precisión.
+      const currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        mayShowUserSettingsDialog: true,
       });
 
-      setLocation(current);
+      // 4. Guardar las coordenadas obtenidas.
+      setLocation(currentLocation);
     } catch (error) {
-      console.error('Error obteniendo ubicación:', error);
+      console.warn('No se pudo obtener la ubicación actual:', error);
+
+      // 5. Si falla el GPS, intentar usar la última ubicación conocida.
+      try {
+        const lastLocation = await Location.getLastKnownPositionAsync({
+          maxAge: 120000,
+          requiredAccuracy: 200,
+        });
+
+        if (lastLocation) {
+          setLocation(lastLocation);
+          return;
+        }
+      } catch (fallbackError) {
+        console.warn(
+          'Tampoco se pudo recuperar la última ubicación:',
+          fallbackError
+        );
+      }
+
       setLocationError(true);
     }
   }
-
   const center = location
     ? {
       latitude: location.coords.latitude,
