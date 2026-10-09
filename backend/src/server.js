@@ -46,6 +46,19 @@ const loginRateLimit = rateLimit({
     },
 });
 
+const aiRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        ok: false,
+        message:
+            'Ha enviado demasiadas consultas a la IA. Espere 15 minutos antes de intentarlo nuevamente.',
+        code: 'AI_RATE_LIMITED',
+    },
+});
+
 const recoveryRateLimit = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 5,
@@ -1865,6 +1878,7 @@ app.get(
 app.post(
     '/api/ai/assistant',
     auth,
+    aiRateLimit,
     async (req, res, next) => {
         try {
             const message = String(
