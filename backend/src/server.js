@@ -800,10 +800,10 @@ app.post(
                 req.body.password || ''
             );
 
-            if (name.length < 3) {
+            if (name.length < 3 || name.length > 120) {
                 return res.status(400).json({
                     message:
-                        'El nombre debe tener al menos 3 caracteres',
+                        'El nombre debe tener al menos 3 caracteres y no más de 120',
                     code: 'INVALID_NAME',
                 });
             }
@@ -819,10 +819,10 @@ app.post(
                 });
             }
 
-            if (password.length < 8) {
+            if (password.length < 8 || password.length > 128) {
                 return res.status(400).json({
                     message:
-                        'La contraseña debe tener al menos 8 caracteres',
+                        'La contraseña debe tener al menos 8 caracteres y no más de 128',
                     code: 'INVALID_PASSWORD',
                 });
             }
@@ -1659,7 +1659,7 @@ app.post(
                 req.body.description || ''
             ).trim();
 
-            if (description.length < 5) {
+            if (description.length < 5 || description.length > 1000) {
                 return res.status(400).json({
                     message:
                         'Describe mejor la necesidad',
@@ -1679,10 +1679,24 @@ app.post(
                 // Clasificación local.
             }
 
-            const category = String(
-                req.body.category ||
-                ai.category
+            const allowedCategories = [
+                'help',
+                'share',
+                'job',
+                'report',
+                'donation',
+                'accessibility',
+            ];
+
+            const requestedCategory = String(
+                req.body.category || ''
             ).trim();
+
+            const category = allowedCategories.includes(requestedCategory)
+                ? requestedCategory
+                : allowedCategories.includes(ai.category)
+                    ? ai.category
+                    : 'help';
 
             const { rows } =
                 await pool.query(
@@ -1770,10 +1784,10 @@ app.post(
                 req.body.body || ''
             ).trim();
 
-            if (body.length < 3) {
+            if (body.length < 3 || body.length > 2000) {
                 return res.status(400).json({
                     message:
-                        'La publicación es demasiado corta',
+                        'La publicación debe tener entre 3 y 2000 caracteres',
                     code: 'INVALID_BODY',
                 });
             }
@@ -1857,10 +1871,10 @@ app.post(
                 req.body.message || ''
             ).trim();
 
-            if (message.length < 3) {
+            if (message.length < 3 || message.length > 2000) {
                 return res.status(400).json({
                     message:
-                        'Escribe una consulta',
+                        'La consulta debe tener entre 3 y 2000 caracteres',
                     code: 'INVALID_MESSAGE',
                 });
             }
