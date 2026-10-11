@@ -12,3 +12,5 @@ coverage/
 backend/node_modules/
 # Backups locales de la base de datos
 nexo_backup_*.sql
+#copias de seguriadad locales 
+/backups/

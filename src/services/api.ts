@@ -1,7 +1,7 @@
 import { API_URL } from '../config/env';
 import { User } from '../models/User';
 import { Need } from '../models/Need';
-import { CommunityPost } from '../models/CommunityPost';
+import { CommunityPost, CreateCommunityPostInput } from '../models/CommunityPost';
 import { MapPlace } from '../models/MapPlace';
 import { AIResponse } from '../models/AIResponse';
 
@@ -206,14 +206,22 @@ export const api = {
       },
     }),
 
-  createPost: (token: string, body: string) =>
-    request<CommunityPost>('/community', {
+  createPost: (
+    token: string,
+    input: string | CreateCommunityPostInput,
+  ) => {
+    const payload = typeof input === 'string'
+      ? { body: input }
+      : input;
+
+    return request<CommunityPost>('/community', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ body }),
-    }),
+      body: JSON.stringify(payload),
+    });
+  },
 
   places: () =>
     request<MapPlace[]>('/map/places'),

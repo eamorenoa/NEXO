@@ -1881,20 +1881,25 @@ app.get(
     requirePermission('community.read'),
     async (req, res, next) => {
         try {
-            const { rows } =
-                await pool.query(`
-                    SELECT
-                        p.id,
-                        p.body,
-                        p.created_at,
-                        u.name AS author
-                    FROM community_posts p
-                    JOIN users u
-                        ON u.id = p.user_id
-                    ORDER BY
-                        p.created_at DESC
-                    LIMIT 50
-                `);
+            const { rows } = await pool.query(`
+                SELECT
+                    p.id,
+                    p.user_id,
+                    p.body,
+                    p.post_type,
+                    p.title,
+                    p.category,
+                    p.status,
+                    p.created_at,
+                    p.updated_at,
+                    u.name AS author
+                FROM community_posts p
+                JOIN users u
+                    ON u.id = p.user_id
+                WHERE p.status <> 'removed'
+                ORDER BY p.created_at DESC
+                LIMIT 50
+            `);
 
             res.json(rows);
         } catch (error) {
@@ -1909,9 +1914,33 @@ app.post(
     requirePermission('community.create'),
     async (req, res, next) => {
         try {
-            const body = String(
-                req.body.body || ''
-            ).trim();
+            const body = String(req.body.body || '').trim();
+            const postType = String(
+                req.body.post_type || 'activity'
+            ).trim().toLowerCase();
+
+            const rawTitle = req.body.title;
+            const rawCategory = req.body.category;
+
+            const title = rawTitle == null
+                ? null
+                : String(rawTitle).trim() || null;
+
+            const category = rawCategory == null
+                ? null
+                : String(rawCategory).trim() || null;
+
+            const allowedTypes = new Set([
+                'need',
+                'offer',
+                'donation',
+                'sale',
+                'promotion',
+                'service',
+                'job',
+                'activity',
+                'exchange',
+            ]);
 
             if (body.length < 3 || body.length > 2000) {
                 return res.status(400).json({
@@ -1921,24 +1950,56 @@ app.post(
                 });
             }
 
-            const { rows } =
-                await pool.query(
-                    `
-                    INSERT INTO community_posts (
-                        user_id,
-                        body
-                    )
-                    VALUES ($1, $2)
-                    RETURNING
-                        id,
-                        body,
-                        created_at
-                    `,
-                    [
-                        req.user.id,
-                        body,
-                    ]
-                );
+            if (!allowedTypes.has(postType)) {
+                return res.status(400).json({
+                    message: 'El tipo de publicación no es válido',
+                    code: 'INVALID_POST_TYPE',
+                });
+            }
+
+            if (title !== null && title.length > 150) {
+                return res.status(400).json({
+                    message: 'El título no puede superar 150 caracteres',
+                    code: 'INVALID_TITLE',
+                });
+            }
+
+            if (category !== null && category.length > 60) {
+                return res.status(400).json({
+                    message: 'La categoría no puede superar 60 caracteres',
+                    code: 'INVALID_CATEGORY',
+                });
+            }
+
+            const { rows } = await pool.query(
+                `
+                INSERT INTO community_posts (
+                    user_id,
+                    body,
+                    post_type,
+                    title,
+                    category
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING
+                    id,
+                    user_id,
+                    body,
+                    post_type,
+                    title,
+                    category,
+                    status,
+                    created_at,
+                    updated_at
+                `,
+                [
+                    req.user.id,
+                    body,
+                    postType,
+                    title,
+                    category,
+                ]
+            );
 
             res.status(201).json(rows[0]);
         } catch (error) {
