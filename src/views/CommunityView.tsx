@@ -1,4 +1,6 @@
 import {
+  Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -54,7 +56,9 @@ export function CommunityView({ token }: { token?: string }) {
       </Text>
 
       <Card>
-        <Text style={styles.sectionTitle}>Crear publicación</Text>
+        <Text style={styles.sectionTitle}>
+          {vm.editingId !== null ? 'Editar publicación' : 'Crear publicación'}
+        </Text>
 
         <Text style={styles.label}>Tipo de publicación</Text>
 
@@ -67,7 +71,17 @@ export function CommunityView({ token }: { token?: string }) {
                 key={type.value}
                 accessibilityRole="button"
                 accessibilityState={{ selected }}
-                onPress={() => vm.setPostType(type.value)}
+                onPress={() => {
+                  vm.setPostType(type.value);
+
+                  if (type.value === 'job') {
+                    if (!['Oferta laboral', 'Busco empleo'].includes(vm.category)) {
+                      vm.setCategory('Oferta laboral');
+                    }
+                  } else {
+                    vm.setCategory('');
+                  }
+                }}
                 style={[
                   styles.typeOption,
                   selected && styles.typeOptionSelected,
@@ -90,25 +104,77 @@ export function CommunityView({ token }: { token?: string }) {
         <TextInput
           value={vm.title}
           onChangeText={vm.setTitle}
-          placeholder="Ej. Busco voluntarios para una jornada"
+          placeholder={
+            vm.postType === 'job'
+              ? vm.category === 'Busco empleo'
+                ? 'Ej. Busco empleo de auxiliar administrativo'
+                : 'Ej. Vacante para auxiliar administrativo'
+              : 'Ej. Busco voluntarios para una jornada'
+          }
           maxLength={150}
           style={styles.input}
         />
 
-        <Text style={styles.label}>Categoría (opcional)</Text>
-        <TextInput
-          value={vm.category}
-          onChangeText={vm.setCategory}
-          placeholder="Ej. Educación, alimentos, transporte"
-          maxLength={60}
-          style={styles.input}
-        />
+        {vm.postType === 'job' ? (
+          <View>
+            <Text style={styles.label}>Tipo de publicación laboral</Text>
+
+            <View style={styles.typeList}>
+              {[
+                { value: 'Oferta laboral', label: 'Ofrezco empleo' },
+                { value: 'Busco empleo', label: 'Busco empleo' },
+              ].map((option) => {
+                const selected = vm.category === option.value;
+
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => vm.setCategory(option.value)}
+                    style={[
+                      styles.typeOption,
+                      selected && styles.typeOptionSelected,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.typeOptionText,
+                        selected && styles.typeOptionTextSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ) : (
+          <View>
+            <Text style={styles.label}>Categoría (opcional)</Text>
+
+            <TextInput
+              value={vm.category}
+              onChangeText={vm.setCategory}
+              placeholder="Ej. Educación, alimentos, transporte"
+              maxLength={60}
+              style={styles.input}
+            />
+          </View>
+        )}
 
         <Text style={styles.label}>Descripción</Text>
         <TextInput
           value={vm.body}
           onChangeText={vm.setBody}
-          placeholder="Cuente a la comunidad en qué consiste su publicación..."
+          placeholder={
+            vm.postType === 'job'
+              ? vm.category === 'Busco empleo'
+                ? 'Describa su perfil, experiencia, habilidades y disponibilidad.'
+                : 'Describa las funciones, requisitos, horario y condiciones de la vacante.'
+              : 'Cuente a la comunidad en qué consiste su publicación...'
+          }
           multiline
           maxLength={2000}
           style={[styles.input, styles.bodyInput]}
@@ -127,16 +193,32 @@ export function CommunityView({ token }: { token?: string }) {
         <Pressable
           accessibilityRole="button"
           disabled={vm.loading}
-          onPress={() => void vm.create()}
+          onPress={() => void vm.save()}
           style={[
             styles.button,
             vm.loading && styles.buttonDisabled,
           ]}
         >
           <Text style={styles.buttonText}>
-            {vm.loading ? 'Procesando...' : 'Publicar'}
+            {vm.loading
+              ? 'Procesando...'
+              : vm.editingId !== null
+                ? 'Guardar cambios'
+                : 'Publicar'}
           </Text>
         </Pressable>
+
+        {vm.editingId !== null ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={vm.loading}
+            onPress={vm.cancelEdit}
+            style={styles.cancelButton}
+          >
+            <Text style={styles.cancelButtonText}>Cancelar edición</Text>
+          </Pressable>
+        ) : null}
+
       </Card>
 
       <View style={styles.feedHeader}>
@@ -188,6 +270,52 @@ export function CommunityView({ token }: { token?: string }) {
               {new Date(post.created_at).toLocaleString()}
             </Text>
           ) : null}
+
+          {post.is_owner ? (
+            <View style={styles.actionRow}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={vm.loading}
+                onPress={() => vm.beginEdit(post)}
+                style={styles.editButton}
+              >
+                <Text style={styles.actionText}>Editar</Text>
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                disabled={vm.loading}
+                onPress={() => {
+                  const confirmDelete = () => void vm.remove(post.id);
+
+                  if (Platform.OS === 'web') {
+                    if (typeof globalThis.confirm === 'function' &&
+                      globalThis.confirm('¿Está seguro de que desea eliminar esta publicación?')) {
+                      confirmDelete();
+                    }
+                    return;
+                  }
+
+                  Alert.alert(
+                    'Eliminar publicación',
+                    '¿Está seguro de que desea eliminar esta publicación?',
+                    [
+                      { text: 'Cancelar', style: 'cancel' },
+                      {
+                        text: 'Eliminar',
+                        style: 'destructive',
+                        onPress: confirmDelete,
+                      },
+                    ],
+                  );
+                }}
+                style={styles.deleteButton}
+              >
+                <Text style={styles.deleteButtonText}>Eliminar</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
         </Card>
       ))}
     </ScrollView>
@@ -347,4 +475,50 @@ const styles = StyleSheet.create({
     color: colors.text,
     opacity: 0.7,
   },
+
+  cancelButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  cancelButtonText: {
+    color: colors.text,
+    fontWeight: '700',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  editButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 10,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#B42318',
+    borderRadius: 10,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionText: {
+    color: colors.primary,
+    fontWeight: '800',
+  },
+  deleteButtonText: {
+    color: '#B42318',
+    fontWeight: '800',
+  },
+
 });

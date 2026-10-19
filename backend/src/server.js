@@ -1885,6 +1885,7 @@ app.get(
                 SELECT
                     p.id,
                     p.user_id,
+                    (p.user_id = $1) AS is_owner,
                     p.body,
                     p.post_type,
                     p.title,
@@ -1899,7 +1900,7 @@ app.get(
                 WHERE p.status <> 'removed'
                 ORDER BY p.created_at DESC
                 LIMIT 50
-            `);
+            `, [req.user.id]);
 
             res.json(rows);
         } catch (error) {
@@ -1990,7 +1991,8 @@ app.post(
                     category,
                     status,
                     created_at,
-                    updated_at
+                    updated_at,
+                    TRUE AS is_owner
                 `,
                 [
                     req.user.id,
@@ -2002,6 +2004,149 @@ app.post(
             );
 
             res.status(201).json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+
+app.patch(
+    '/api/community/:id',
+    auth,
+    requirePermission('community.update.own'),
+    async (req, res, next) => {
+        try {
+            const id = String(req.params.id || '');
+
+            if (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) < 1) {
+                return res.status(400).json({
+                    message: 'Identificador de publicación inválido',
+                    code: 'INVALID_POST_ID',
+                });
+            }
+
+            const body = typeof req.body.body === 'string'
+                ? req.body.body.trim()
+                : '';
+
+            const postType = String(req.body.post_type || '')
+                .trim()
+                .toLowerCase();
+
+            const title = req.body.title == null
+                ? null
+                : String(req.body.title).trim() || null;
+
+            const category = req.body.category == null
+                ? null
+                : String(req.body.category).trim() || null;
+
+            const allowedTypes = new Set([
+                'need', 'offer', 'donation', 'sale', 'promotion',
+                'service', 'job', 'activity', 'exchange',
+            ]);
+
+            if (body.length < 3 || body.length > 2000) {
+                return res.status(400).json({
+                    message: 'La publicación debe tener entre 3 y 2000 caracteres',
+                    code: 'INVALID_BODY',
+                });
+            }
+
+            if (!allowedTypes.has(postType)) {
+                return res.status(400).json({
+                    message: 'El tipo de publicación no es válido',
+                    code: 'INVALID_POST_TYPE',
+                });
+            }
+
+            if (title !== null && title.length > 150) {
+                return res.status(400).json({
+                    message: 'El título no puede superar 150 caracteres',
+                    code: 'INVALID_TITLE',
+                });
+            }
+
+            if (category !== null && category.length > 60) {
+                return res.status(400).json({
+                    message: 'La categoría no puede superar 60 caracteres',
+                    code: 'INVALID_CATEGORY',
+                });
+            }
+
+            const { rows } = await pool.query(
+                `
+                UPDATE community_posts
+                SET
+                    body = $1,
+                    post_type = $2,
+                    title = $3,
+                    category = $4,
+                    updated_at = NOW()
+                WHERE id = $5
+                  AND user_id = $6
+                  AND status <> 'removed'
+                RETURNING
+                    id, user_id, body, post_type, title, category,
+                    status, created_at, updated_at
+                `,
+                [body, postType, title, category, id, req.user.id]
+            );
+
+            if (!rows.length) {
+                return res.status(404).json({
+                    message: 'Publicación no encontrada o no tiene autorización para modificarla',
+                    code: 'POST_NOT_FOUND',
+                });
+            }
+
+            return res.json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+app.delete(
+    '/api/community/:id',
+    auth,
+    requirePermission('community.delete.own'),
+    async (req, res, next) => {
+        try {
+            const id = String(req.params.id || '');
+
+            if (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) < 1) {
+                return res.status(400).json({
+                    message: 'Identificador de publicación inválido',
+                    code: 'INVALID_POST_ID',
+                });
+            }
+
+            const { rows } = await pool.query(
+                `
+                UPDATE community_posts
+                SET status = 'removed',
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND user_id = $2
+                  AND status <> 'removed'
+                RETURNING id
+                `,
+                [id, req.user.id]
+            );
+
+            if (!rows.length) {
+                return res.status(404).json({
+                    message: 'Publicación no encontrada o no tiene autorización para eliminarla',
+                    code: 'POST_NOT_FOUND',
+                });
+            }
+
+            return res.json({
+                ok: true,
+                message: 'Publicación eliminada correctamente',
+            });
         } catch (error) {
             next(error);
         }

@@ -35,12 +35,18 @@ export function useNeedsViewModel(token?: string) {
   }, [load]);
 
   const create = async () => {
+    if (loading) {
+      return;
+    }
+
     if (!token) {
       setError('Inicie sesión para publicar una necesidad.');
       return;
     }
 
-    if (description.trim().length < 5) {
+    const cleanDescription = description.trim();
+
+    if (cleanDescription.length < 5) {
       setError('Describa la necesidad con un poco más de detalle.');
       return;
     }
@@ -50,10 +56,14 @@ export function useNeedsViewModel(token?: string) {
     setSuccess('');
 
     try {
-      const created = await NeedService.create(token, description.trim());
+      const created = await NeedService.create(
+        token,
+        cleanDescription,
+      );
 
       setItems(current => [created, ...current]);
       setDescription('');
+
       setSuccess(
         `NEXO AI la clasificó como: ${created.ai_category || created.category
         }.`,

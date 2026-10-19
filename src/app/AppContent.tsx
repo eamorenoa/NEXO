@@ -26,6 +26,7 @@ import { AIView } from '../views/AIView';
 import { EmergencyView } from '../views/EmergencyView';
 
 import { AuthService } from '../services/AuthService';
+import { setAccessTokenRefreshHandler } from '../services/api';
 import { colors } from '../shared/theme';
 
 const tabs = [
@@ -61,6 +62,18 @@ export function AppContent() {
    *   AuthService intenta automáticamente
    *   utilizar el refresh token.
    */
+  useEffect(() => {
+    return setAccessTokenRefreshHandler((newAccessToken) => {
+      if (newAccessToken) {
+        setToken(newAccessToken);
+      } else {
+        setUser(null);
+        setToken(undefined);
+        setScreen('home');
+      }
+    });
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 

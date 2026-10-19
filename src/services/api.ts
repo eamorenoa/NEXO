@@ -1,4 +1,5 @@
 import { API_URL } from '../config/env';
+import { SessionStorage } from './SessionStorage';
 import { User } from '../models/User';
 import { Need } from '../models/Need';
 import { CommunityPost, CreateCommunityPostInput } from '../models/CommunityPost';
@@ -41,9 +42,113 @@ export interface ResetPasswordResponse {
   message: string;
 }
 
+type ApiError = Error & {
+  status?: number;
+  code?: string;
+  requiresVerification?: boolean;
+  email?: string;
+};
+
+const ACCESS_TOKEN_KEY = 'nexo_access_token';
+const REFRESH_TOKEN_KEY = 'nexo_refresh_token';
+const USER_KEY = 'nexo_user';
+
+let accessTokenRefreshHandler:
+  ((accessToken: string | null) => void) | undefined;
+
+export function setAccessTokenRefreshHandler(
+  handler: (accessToken: string | null) => void,
+): () => void {
+  accessTokenRefreshHandler = handler;
+
+  return () => {
+    if (accessTokenRefreshHandler === handler) {
+      accessTokenRefreshHandler = undefined;
+    }
+  };
+}
+
+let refreshInProgress: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (refreshInProgress) {
+    return refreshInProgress;
+  }
+
+  refreshInProgress = (async () => {
+    const refreshToken = await SessionStorage.getItem(REFRESH_TOKEN_KEY);
+
+    if (!refreshToken) {
+      accessTokenRefreshHandler?.(null);
+      return null;
+    }
+
+    let response: Response;
+
+    try {
+      response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+    } catch {
+      // Un fallo de red no significa que la sesión haya sido revocada.
+      throw new Error('No hay conexión para renovar la sesión. Inténtelo de nuevo.');
+    }
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const definitiveSessionErrors = [
+        'INVALID_REFRESH_TOKEN',
+        'REFRESH_TOKEN_REVOKED',
+        'REFRESH_TOKEN_EXPIRED',
+        'USER_INACTIVE',
+      ];
+
+      if (definitiveSessionErrors.includes(result.code)) {
+        await Promise.all([
+          SessionStorage.deleteItem(ACCESS_TOKEN_KEY),
+          SessionStorage.deleteItem(REFRESH_TOKEN_KEY),
+          SessionStorage.deleteItem(USER_KEY),
+        ]);
+        accessTokenRefreshHandler?.(null);
+      }
+
+      throw new Error(
+        result.message || 'No fue posible renovar la sesión.',
+      );
+    }
+
+    if (
+      typeof result.accessToken !== 'string' ||
+      !result.accessToken ||
+      typeof result.refreshToken !== 'string' ||
+      !result.refreshToken
+    ) {
+      // No borramos tokens si la respuesta del servidor está incompleta.
+      throw new Error('La respuesta de renovación no contiene tokens válidos.');
+    }
+
+    // El backend rota ambos tokens: guardar ambos antes de reintentar.
+    await SessionStorage.setItem(ACCESS_TOKEN_KEY, result.accessToken);
+    await SessionStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken);
+
+    accessTokenRefreshHandler?.(result.accessToken);
+    return result.accessToken;
+  })();
+
+  try {
+    return await refreshInProgress;
+  } finally {
+    refreshInProgress = null;
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
+  hasRetried = false,
 ): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -58,17 +163,32 @@ async function request<T>(
   if (!response.ok) {
     const error = new Error(
       body.message || 'No se pudo completar la solicitud',
-    ) as Error & {
-      status?: number;
-      code?: string;
-      requiresVerification?: boolean;
-      email?: string;
-    };
+    ) as ApiError;
 
     error.status = response.status;
     error.code = body.code;
     error.requiresVerification = body.requiresVerification;
     error.email = body.email;
+
+    if (
+      response.status === 401 &&
+      body.code === 'TOKEN_EXPIRED' &&
+      !hasRetried &&
+      path !== '/auth/refresh'
+    ) {
+      const newAccessToken = await refreshAccessToken();
+
+      if (newAccessToken) {
+        const headers = new Headers(options.headers);
+        headers.set('Authorization', `Bearer ${newAccessToken}`);
+
+        return request<T>(
+          path,
+          { ...options, headers },
+          true,
+        );
+      }
+    }
 
     throw error;
   }
@@ -222,6 +342,30 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+
+  updatePost: (
+    token: string,
+    id: number | string,
+    input: CreateCommunityPostInput,
+  ) =>
+    request<CommunityPost>(`/community/${id}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(input),
+    }),
+
+  deletePost: (
+    token: string,
+    id: number | string,
+  ) =>
+    request<{ ok: boolean; message: string }>(`/community/${id}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }),
 
   places: () =>
     request<MapPlace[]>('/map/places'),

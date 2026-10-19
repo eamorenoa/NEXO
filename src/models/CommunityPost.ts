@@ -18,6 +18,7 @@ export type CommunityPostStatus =
 export type CommunityPost = {
   id: number | string;
   user_id?: number | string;
+  is_owner?: boolean;
   body: string;
   post_type: CommunityPostType;
   title?: string | null;
