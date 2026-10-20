@@ -5,6 +5,8 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createResumeRouter } from './routes/resumes.js';
+import { createProfileRouter } from './routes/profile.js';
 import pg from 'pg';
 import crypto from 'node:crypto';
 
@@ -2296,6 +2298,22 @@ app.get(
     }
 );
 
+/*
+|--------------------------------------------------------------------------
+| HOJAS DE VIDA
+|--------------------------------------------------------------------------
+*/
+
+
+app.use('/api/resumes', createResumeRouter({ pool, auth }));
+
+/*
+|--------------------------------------------------------------------------
+| PERFIL DE USUARIO
+|--------------------------------------------------------------------------
+*/
+
+app.use('/api/profile', createProfileRouter({ pool, auth }));
 /*
 |--------------------------------------------------------------------------
 | ERROR HANDLER
