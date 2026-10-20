@@ -10,6 +10,7 @@ import {
 import { useNeedsViewModel } from '../viewmodels/useNeedsViewModel';
 import { Card } from '../components/Card';
 import { colors } from '../shared/theme';
+import { LocationPicker } from '../components/LocationPicker';
 
 export function NeedsView({
     token,
@@ -24,6 +25,7 @@ export function NeedsView({
         <ScrollView
             style={{ backgroundColor: colors.background }}
             contentContainerStyle={s.content}
+            keyboardShouldPersistTaps="handled"
         >
             <Pressable onPress={onBack}>
                 <Text style={s.back}>‹ Inicio</Text>
@@ -33,7 +35,11 @@ export function NeedsView({
 
             <Text style={s.sub}>
                 Describa su necesidad. NEXO AI la clasifica automáticamente.
+                Puede añadir una ubicación para que otras personas la encuentren
+                en el mapa.
             </Text>
+
+            <Text style={s.label}>Descripción de la necesidad</Text>
 
             <TextInput
                 multiline
@@ -42,13 +48,35 @@ export function NeedsView({
                 editable={!vm.loading}
                 maxLength={1000}
                 placeholder="Ej. Necesito una persona que me ayude a llevar unas cajas..."
+                accessibilityLabel="Descripción de la necesidad"
                 style={s.input}
+            />
+
+            <LocationPicker
+                value={{
+                    address: vm.address,
+                    latitude: vm.latitude.trim() === '' ? null : Number(vm.latitude),
+                    longitude: vm.longitude.trim() === '' ? null : Number(vm.longitude),
+                }}
+                onChange={(location) => {
+                    vm.setAddress(location.address);
+                    vm.setLatitude(
+                        location.latitude === null ? '' : String(location.latitude),
+                    );
+                    vm.setLongitude(
+                        location.longitude === null ? '' : String(location.longitude),
+                    );
+                }}
+                disabled={vm.loading}
             />
 
             <Pressable
                 onPress={vm.editingId !== null ? vm.saveEditing : vm.create}
                 disabled={vm.loading}
-                style={s.button}
+                style={[
+                    s.button,
+                    vm.loading && s.buttonDisabled,
+                ]}
             >
                 <Text style={s.buttonText}>
                     {vm.loading
@@ -60,13 +88,22 @@ export function NeedsView({
             </Pressable>
 
             {vm.editingId !== null && (
-                <Pressable onPress={vm.cancelEditing} style={s.cancelButton}>
+                <Pressable
+                    onPress={vm.cancelEditing}
+                    disabled={vm.loading}
+                    style={s.cancelButton}
+                >
                     <Text style={s.cancelText}>Cancelar edición</Text>
                 </Pressable>
             )}
 
-            {!!vm.success && <Text style={s.success}>{vm.success}</Text>}
-            {!!vm.error && <Text style={s.error}>{vm.error}</Text>}
+            {!!vm.success && (
+                <Text style={s.success}>{vm.success}</Text>
+            )}
+
+            {!!vm.error && (
+                <Text style={s.error}>{vm.error}</Text>
+            )}
 
             <Text style={s.section}>Solicitudes recientes</Text>
 
@@ -81,6 +118,19 @@ export function NeedsView({
                     </View>
 
                     <Text style={s.desc}>{item.description}</Text>
+
+                    {!!item.address && (
+                        <Text style={s.address}>
+                            Ubicación: {item.address}
+                        </Text>
+                    )}
+
+                    {item.latitude != null && item.longitude != null && (
+                        <Text style={s.coordinates}>
+                            Coordenadas: {Number(item.latitude).toFixed(5)},{' '}
+                            {Number(item.longitude).toFixed(5)}
+                        </Text>
+                    )}
 
                     <Text style={s.meta}>
                         {item.author || 'Usuario'} ·{' '}
@@ -142,6 +192,12 @@ const s = StyleSheet.create({
         marginTop: 5,
         marginBottom: 15,
     },
+    label: {
+        color: colors.text,
+        fontSize: 13,
+        fontWeight: '800',
+        marginBottom: 6,
+    },
     input: {
         minHeight: 130,
         borderWidth: 1,
@@ -152,6 +208,30 @@ const s = StyleSheet.create({
         textAlignVertical: 'top',
         fontSize: 14,
     },
+    locationLabel: {
+        color: colors.text,
+        fontSize: 13,
+        fontWeight: '800',
+        marginTop: 12,
+        marginBottom: 5,
+    },
+    locationInput: {
+        minHeight: 46,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 12,
+        backgroundColor: '#fff',
+        paddingHorizontal: 12,
+        fontSize: 14,
+        color: colors.text,
+    },
+    locationHelp: {
+        color: colors.muted,
+        fontSize: 12,
+        lineHeight: 18,
+        marginTop: 8,
+        marginBottom: 5,
+    },
     button: {
         backgroundColor: colors.primary,
         minHeight: 50,
@@ -159,6 +239,9 @@ const s = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginTop: 10,
+    },
+    buttonDisabled: {
+        opacity: 0.6,
     },
     buttonText: {
         color: '#fff',
@@ -214,6 +297,16 @@ const s = StyleSheet.create({
         color: colors.text,
         fontWeight: '700',
         marginTop: 9,
+    },
+    address: {
+        color: colors.text,
+        fontSize: 12,
+        marginTop: 8,
+    },
+    coordinates: {
+        color: colors.muted,
+        fontSize: 11,
+        marginTop: 4,
     },
     meta: {
         fontSize: 10,

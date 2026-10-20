@@ -68,6 +68,7 @@ function getLocalAnswer(message) {
 }
 
 export async function askAI(message) {
+  const startedAt = Date.now();
   const cleanMessage = String(message || '').trim();
 
   if (cleanMessage.length < 3) {
@@ -82,7 +83,7 @@ export async function askAI(message) {
     process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
   ).replace(/\/+$/, '');
 
-  const model = process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
+  const model = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
 
   try {
     const response = await fetch(`${baseUrl}/api/chat`, {
@@ -107,6 +108,19 @@ export async function askAI(message) {
     }
 
     const result = await response.json();
+
+    console.log('NEXO AI - Diagnóstico Ollama:', {
+      model,
+      httpStatus: response.status,
+      totalSeconds: ((Date.now() - startedAt) / 1000).toFixed(2),
+      generationSeconds: result.eval_duration
+        ? (result.eval_duration / 1e9).toFixed(2)
+        : null,
+      promptSeconds: result.prompt_eval_duration
+        ? (result.prompt_eval_duration / 1e9).toFixed(2)
+        : null,
+    });
+
     const answer = result.message?.content?.trim();
 
     if (!answer) {

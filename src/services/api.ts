@@ -283,6 +283,11 @@ export const api = {
     token: string,
     description: string,
     category?: string,
+    location?: {
+      address?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
   ) =>
     request<Need>('/needs', {
       method: 'POST',
@@ -292,6 +297,7 @@ export const api = {
       body: JSON.stringify({
         description,
         category,
+        ...location,
       }),
     }),
 
@@ -299,15 +305,22 @@ export const api = {
     token: string,
     id: number | string,
     description: string,
+    location?: {
+      address?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
   ) =>
     request<Need>(`/needs/${id}`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({
+        description,
+        ...location,
+      }),
     }),
-
   deleteNeed: (
     token: string,
     id: number | string,
@@ -367,9 +380,19 @@ export const api = {
       },
     }),
 
-  places: () =>
-    request<MapPlace[]>('/map/places'),
+  places: async () => {
+    const token = await SessionStorage.getItem(ACCESS_TOKEN_KEY);
 
+    if (!token) {
+      throw new Error('No hay una sesión activa para consultar el mapa.');
+    }
+
+    return request<MapPlace[]>('/map/places', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  },
   ai: (
     token: string,
     message: string,

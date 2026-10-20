@@ -1,39 +1,44 @@
-﻿import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Need } from '../models/Need';
+import { CommunityPost } from '../models/CommunityPost';
+import { NeedService } from '../services/NeedService';
+import { CommunityService } from '../services/CommunityService';
 
-export type Period = 'Semana' | 'Mes';
+export function useHomeViewModel(token: string) {
+  const [needs, setNeeds] = useState<Need[]>([]);
+  const [posts, setPosts] = useState<CommunityPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-const analytics = {
-  Semana: [
-    { label: 'Lun', value: 8 },
-    { label: 'Mar', value: 12 },
-    { label: 'Mié', value: 6 },
-    { label: 'Jue', value: 15 },
-    { label: 'Vie', value: 10 },
-    { label: 'Sáb', value: 7 },
-    { label: 'Dom', value: 5 },
-  ],
-  Mes: [
-    { label: 'Sem 1', value: 25 },
-    { label: 'Sem 2', value: 38 },
-    { label: 'Sem 3', value: 31 },
-    { label: 'Sem 4', value: 45 },
-  ],
-};
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(false);
 
-const categoryStats = [
-  { label: 'Ayuda', icon: '🤝', value: 78 },
-  { label: 'Empleo', icon: '💼', value: 62 },
-  { label: 'Donaciones', icon: '🎁', value: 55 },
-  { label: 'Reportes', icon: '📢', value: 41 },
-];
+    try {
+      const [needsResult, postsResult] = await Promise.all([
+        NeedService.list(token),
+        CommunityService.list(token),
+      ]);
 
-export function useHomeViewModel() {
-  const [period, setPeriod] = useState<Period>('Semana');
+      setNeeds(needsResult);
+      setPosts(postsResult);
+    } catch (err) {
+      console.error('Error cargando el resumen de inicio:', err);
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   return {
-    period,
-    setPeriod,
-    data: analytics[period],
-    categories: categoryStats,
+    needs,
+    posts,
+    loading,
+    error,
+    reload: load,
   };
 }

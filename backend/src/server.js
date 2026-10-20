@@ -1649,6 +1649,9 @@ app.get(
                     n.ai_category,
                     n.ai_confidence,
                     n.created_at,
+                    n.address,
+                    n.latitude,
+                    n.longitude,
                     u.name AS author,
                     (n.user_id = $1) AS is_owner
                 FROM needs n
@@ -1677,22 +1680,57 @@ app.post(
 
             if (description.length < 5 || description.length > 1000) {
                 return res.status(400).json({
-                    message:
-                        'Describe mejor la necesidad',
+                    message: 'Describe mejor la necesidad',
                     code: 'INVALID_DESCRIPTION',
                 });
             }
 
-            let ai =
-                classifyNeed(description);
+            // Ubicación opcional
+            const address = req.body.address == null
+                ? null
+                : String(req.body.address).trim() || null;
+
+            const latitude = req.body.latitude == null || req.body.latitude === ''
+                ? null
+                : Number(req.body.latitude);
+
+            const longitude = req.body.longitude == null || req.body.longitude === ''
+                ? null
+                : Number(req.body.longitude);
+
+            // Validar dirección
+            if (address !== null && address.length > 250) {
+                return res.status(400).json({
+                    message: 'La dirección no puede superar 250 caracteres',
+                    code: 'INVALID_ADDRESS',
+                });
+            }
+
+            // Validar coordenadas
+            if (
+                (latitude === null) !== (longitude === null) ||
+                (latitude !== null && (
+                    !Number.isFinite(latitude) ||
+                    !Number.isFinite(longitude) ||
+                    latitude < -90 ||
+                    latitude > 90 ||
+                    longitude < -180 ||
+                    longitude > 180
+                ))
+            ) {
+                return res.status(400).json({
+                    message: 'Las coordenadas de ubicación no son válidas',
+                    code: 'INVALID_COORDINATES',
+                });
+            }
+
+            // Clasificación de la necesidad mediante IA
+            let ai = classifyNeed(description);
 
             try {
-                ai =
-                    await classifyWithAI(
-                        description
-                    );
+                ai = await classifyWithAI(description);
             } catch {
-                // Clasificación local.
+                // Si la IA falla, se conserva la clasificación local.
             }
 
             const allowedCategories = [
@@ -1714,40 +1752,52 @@ app.post(
                     ? ai.category
                     : 'help';
 
-            const { rows } =
-                await pool.query(
-                    `
-                    INSERT INTO needs (
-                        user_id,
-                        description,
-                        category,
-                        ai_category,
-                        ai_confidence
-                    )
-                    VALUES (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5
-                    )
-                    RETURNING
-                        id,
-                        description,
-                        category,
-                        status,
-                        ai_category,
-                        ai_confidence,
-                        created_at
-                    `,
-                    [
-                        req.user.id,
-                        description,
-                        category,
-                        ai.category,
-                        ai.confidence,
-                    ]
-                );
+            // Guardar necesidad y ubicación opcional
+            const { rows } = await pool.query(
+                `
+                INSERT INTO needs (
+                    user_id,
+                    description,
+                    category,
+                    ai_category,
+                    ai_confidence,
+                    address,
+                    latitude,
+                    longitude
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8
+                )
+                RETURNING
+                    id,
+                    description,
+                    category,
+                    status,
+                    ai_category,
+                    ai_confidence,
+                    created_at,
+                    address,
+                    latitude,
+                    longitude
+                `,
+                [
+                    req.user.id,
+                    description,
+                    category,
+                    ai.category,
+                    ai.confidence,
+                    address,
+                    latitude,
+                    longitude,
+                ]
+            );
 
             res.status(201).json(rows[0]);
         } catch (error) {
@@ -1766,6 +1816,7 @@ app.patch(
             const id = req.params.id;
             const description = req.body.description;
 
+            // Validar identificador
             if (
                 !/^\d+$/.test(id) ||
                 !Number.isSafeInteger(Number(id)) ||
@@ -1777,6 +1828,7 @@ app.patch(
                 });
             }
 
+            // Validar descripción
             if (
                 typeof description !== 'string' ||
                 description.trim().length < 5 ||
@@ -1788,12 +1840,97 @@ app.patch(
                 });
             }
 
+            // Leer ubicación opcional.
+            // Si un campo no se envía, se conserva su valor actual.
+            const hasAddress = Object.prototype.hasOwnProperty.call(
+                req.body,
+                'address'
+            );
+            const hasLatitude = Object.prototype.hasOwnProperty.call(
+                req.body,
+                'latitude'
+            );
+            const hasLongitude = Object.prototype.hasOwnProperty.call(
+                req.body,
+                'longitude'
+            );
+
+            const address = !hasAddress
+                ? undefined
+                : req.body.address == null
+                    ? null
+                    : String(req.body.address).trim() || null;
+
+            const latitude = !hasLatitude
+                ? undefined
+                : req.body.latitude == null || req.body.latitude === ''
+                    ? null
+                    : Number(req.body.latitude);
+
+            const longitude = !hasLongitude
+                ? undefined
+                : req.body.longitude == null || req.body.longitude === ''
+                    ? null
+                    : Number(req.body.longitude);
+
+            // Validar dirección
+            if (address !== undefined && address !== null && address.length > 250) {
+                return res.status(400).json({
+                    message: 'La dirección no puede superar 250 caracteres',
+                    code: 'INVALID_ADDRESS',
+                });
+            }
+
+            // Validar coordenadas cuando se envían ambos campos.
+            // Si se envía solamente uno, se rechaza la solicitud.
+            if (
+                hasLatitude !== hasLongitude ||
+                (
+                    latitude !== undefined &&
+                    longitude !== undefined &&
+                    (
+                        (latitude === null) !== (longitude === null) ||
+                        (
+                            latitude !== null &&
+                            (
+                                !Number.isFinite(latitude) ||
+                                !Number.isFinite(longitude) ||
+                                latitude < -90 ||
+                                latitude > 90 ||
+                                longitude < -180 ||
+                                longitude > 180
+                            )
+                        )
+                    )
+                )
+            ) {
+                return res.status(400).json({
+                    message: 'Las coordenadas de ubicación no son válidas',
+                    code: 'INVALID_COORDINATES',
+                });
+            }
+
+            // Actualizar solamente la necesidad de este usuario.
+            // Los campos omitidos conservan sus valores actuales.
             const { rows } = await pool.query(
                 `
                 UPDATE needs
-                SET description = $1
-                WHERE id = $2
-                  AND user_id = $3
+                SET
+                    description = $1,
+                    address = CASE
+                        WHEN $2::boolean THEN $3
+                        ELSE address
+                    END,
+                    latitude = CASE
+                        WHEN $4::boolean THEN $5
+                        ELSE latitude
+                    END,
+                    longitude = CASE
+                        WHEN $6::boolean THEN $7
+                        ELSE longitude
+                    END
+                WHERE id = $8
+                  AND user_id = $9
                 RETURNING
                     id,
                     description,
@@ -1801,15 +1938,23 @@ app.patch(
                     status,
                     ai_category,
                     ai_confidence,
-                    created_at
+                    created_at,
+                    address,
+                    latitude,
+                    longitude
                 `,
                 [
                     description.trim(),
+                    hasAddress,
+                    address === undefined ? null : address,
+                    hasLatitude,
+                    latitude === undefined ? null : latitude,
+                    hasLongitude,
+                    longitude === undefined ? null : longitude,
                     id,
                     req.user.id,
                 ]
             );
-
             if (!rows.length) {
                 return res.status(404).json({
                     message: 'Solicitud no encontrada o no tiene autorización para modificarla',
@@ -1895,6 +2040,9 @@ app.get(
                     p.status,
                     p.created_at,
                     p.updated_at,
+                    p.address,
+                    p.latitude,
+                    p.longitude,
                     u.name AS author
                 FROM community_posts p
                 JOIN users u
@@ -1918,6 +2066,7 @@ app.post(
     async (req, res, next) => {
         try {
             const body = String(req.body.body || '').trim();
+
             const postType = String(
                 req.body.post_type || 'activity'
             ).trim().toLowerCase();
@@ -1933,6 +2082,19 @@ app.post(
                 ? null
                 : String(rawCategory).trim() || null;
 
+            // Ubicación opcional
+            const address = req.body.address == null
+                ? null
+                : String(req.body.address).trim() || null;
+
+            const latitude = req.body.latitude == null || req.body.latitude === ''
+                ? null
+                : Number(req.body.latitude);
+
+            const longitude = req.body.longitude == null || req.body.longitude === ''
+                ? null
+                : Number(req.body.longitude);
+
             const allowedTypes = new Set([
                 'need',
                 'offer',
@@ -1945,110 +2107,7 @@ app.post(
                 'exchange',
             ]);
 
-            if (body.length < 3 || body.length > 2000) {
-                return res.status(400).json({
-                    message:
-                        'La publicación debe tener entre 3 y 2000 caracteres',
-                    code: 'INVALID_BODY',
-                });
-            }
-
-            if (!allowedTypes.has(postType)) {
-                return res.status(400).json({
-                    message: 'El tipo de publicación no es válido',
-                    code: 'INVALID_POST_TYPE',
-                });
-            }
-
-            if (title !== null && title.length > 150) {
-                return res.status(400).json({
-                    message: 'El título no puede superar 150 caracteres',
-                    code: 'INVALID_TITLE',
-                });
-            }
-
-            if (category !== null && category.length > 60) {
-                return res.status(400).json({
-                    message: 'La categoría no puede superar 60 caracteres',
-                    code: 'INVALID_CATEGORY',
-                });
-            }
-
-            const { rows } = await pool.query(
-                `
-                INSERT INTO community_posts (
-                    user_id,
-                    body,
-                    post_type,
-                    title,
-                    category
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING
-                    id,
-                    user_id,
-                    body,
-                    post_type,
-                    title,
-                    category,
-                    status,
-                    created_at,
-                    updated_at,
-                    TRUE AS is_owner
-                `,
-                [
-                    req.user.id,
-                    body,
-                    postType,
-                    title,
-                    category,
-                ]
-            );
-
-            res.status(201).json(rows[0]);
-        } catch (error) {
-            next(error);
-        }
-    }
-);
-
-
-app.patch(
-    '/api/community/:id',
-    auth,
-    requirePermission('community.update.own'),
-    async (req, res, next) => {
-        try {
-            const id = String(req.params.id || '');
-
-            if (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) < 1) {
-                return res.status(400).json({
-                    message: 'Identificador de publicación inválido',
-                    code: 'INVALID_POST_ID',
-                });
-            }
-
-            const body = typeof req.body.body === 'string'
-                ? req.body.body.trim()
-                : '';
-
-            const postType = String(req.body.post_type || '')
-                .trim()
-                .toLowerCase();
-
-            const title = req.body.title == null
-                ? null
-                : String(req.body.title).trim() || null;
-
-            const category = req.body.category == null
-                ? null
-                : String(req.body.category).trim() || null;
-
-            const allowedTypes = new Set([
-                'need', 'offer', 'donation', 'sale', 'promotion',
-                'service', 'job', 'activity', 'exchange',
-            ]);
-
+            // Validar contenido
             if (body.length < 3 || body.length > 2000) {
                 return res.status(400).json({
                     message: 'La publicación debe tener entre 3 y 2000 caracteres',
@@ -2077,6 +2136,199 @@ app.patch(
                 });
             }
 
+            // Validar dirección
+            if (address !== null && address.length > 250) {
+                return res.status(400).json({
+                    message: 'La dirección no puede superar 250 caracteres',
+                    code: 'INVALID_ADDRESS',
+                });
+            }
+
+            // Las coordenadas deben enviarse juntas y estar dentro de sus rangos válidos
+            if (
+                (latitude === null) !== (longitude === null) ||
+                (latitude !== null && (
+                    !Number.isFinite(latitude) ||
+                    !Number.isFinite(longitude) ||
+                    latitude < -90 ||
+                    latitude > 90 ||
+                    longitude < -180 ||
+                    longitude > 180
+                ))
+            ) {
+                return res.status(400).json({
+                    message: 'Las coordenadas de ubicación no son válidas',
+                    code: 'INVALID_COORDINATES',
+                });
+            }
+
+            // Crear publicación
+            const { rows } = await pool.query(
+                `
+                INSERT INTO community_posts (
+                    user_id,
+                    body,
+                    post_type,
+                    title,
+                    category,
+                    address,
+                    latitude,
+                    longitude
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING
+                    id,
+                    user_id,
+                    body,
+                    post_type,
+                    title,
+                    category,
+                    status,
+                    created_at,
+                    updated_at,
+                    address,
+                    latitude,
+                    longitude,
+                    TRUE AS is_owner
+                `,
+                [
+                    req.user.id,
+                    body,
+                    postType,
+                    title,
+                    category,
+                    address,
+                    latitude,
+                    longitude,
+                ]
+            );
+
+            res.status(201).json(rows[0]);
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+
+app.patch(
+    '/api/community/:id',
+    auth,
+    requirePermission('community.update.own'),
+    async (req, res, next) => {
+        try {
+            const id = String(req.params.id || '');
+
+            // Validar identificador
+            if (
+                !/^\d+$/.test(id) ||
+                !Number.isSafeInteger(Number(id)) ||
+                Number(id) < 1
+            ) {
+                return res.status(400).json({
+                    message: 'Identificador de publicación inválido',
+                    code: 'INVALID_POST_ID',
+                });
+            }
+
+            // Leer contenido
+            const body = typeof req.body.body === 'string'
+                ? req.body.body.trim()
+                : '';
+
+            const postType = String(req.body.post_type || '')
+                .trim()
+                .toLowerCase();
+
+            const title = req.body.title == null
+                ? null
+                : String(req.body.title).trim() || null;
+
+            const category = req.body.category == null
+                ? null
+                : String(req.body.category).trim() || null;
+
+            // Leer ubicación opcional
+            const address = req.body.address == null
+                ? null
+                : String(req.body.address).trim() || null;
+
+            const latitude = req.body.latitude == null || req.body.latitude === ''
+                ? null
+                : Number(req.body.latitude);
+
+            const longitude = req.body.longitude == null || req.body.longitude === ''
+                ? null
+                : Number(req.body.longitude);
+
+            const allowedTypes = new Set([
+                'need',
+                'offer',
+                'donation',
+                'sale',
+                'promotion',
+                'service',
+                'job',
+                'activity',
+                'exchange',
+            ]);
+
+            // Validar contenido
+            if (body.length < 3 || body.length > 2000) {
+                return res.status(400).json({
+                    message: 'La publicación debe tener entre 3 y 2000 caracteres',
+                    code: 'INVALID_BODY',
+                });
+            }
+
+            if (!allowedTypes.has(postType)) {
+                return res.status(400).json({
+                    message: 'El tipo de publicación no es válido',
+                    code: 'INVALID_POST_TYPE',
+                });
+            }
+
+            if (title !== null && title.length > 150) {
+                return res.status(400).json({
+                    message: 'El título no puede superar 150 caracteres',
+                    code: 'INVALID_TITLE',
+                });
+            }
+
+            if (category !== null && category.length > 60) {
+                return res.status(400).json({
+                    message: 'La categoría no puede superar 60 caracteres',
+                    code: 'INVALID_CATEGORY',
+                });
+            }
+
+            // Validar dirección
+            if (address !== null && address.length > 250) {
+                return res.status(400).json({
+                    message: 'La dirección no puede superar 250 caracteres',
+                    code: 'INVALID_ADDRESS',
+                });
+            }
+
+            // Validar coordenadas
+            if (
+                (latitude === null) !== (longitude === null) ||
+                (latitude !== null && (
+                    !Number.isFinite(latitude) ||
+                    !Number.isFinite(longitude) ||
+                    latitude < -90 ||
+                    latitude > 90 ||
+                    longitude < -180 ||
+                    longitude > 180
+                ))
+            ) {
+                return res.status(400).json({
+                    message: 'Las coordenadas de ubicación no son válidas',
+                    code: 'INVALID_COORDINATES',
+                });
+            }
+
+            // Actualizar publicación propia
             const { rows } = await pool.query(
                 `
                 UPDATE community_posts
@@ -2085,15 +2337,38 @@ app.patch(
                     post_type = $2,
                     title = $3,
                     category = $4,
+                    address = $5,
+                    latitude = $6,
+                    longitude = $7,
                     updated_at = NOW()
-                WHERE id = $5
-                  AND user_id = $6
+                WHERE id = $8
+                  AND user_id = $9
                   AND status <> 'removed'
                 RETURNING
-                    id, user_id, body, post_type, title, category,
-                    status, created_at, updated_at
+                    id,
+                    user_id,
+                    body,
+                    post_type,
+                    title,
+                    category,
+                    status,
+                    created_at,
+                    updated_at,
+                    address,
+                    latitude,
+                    longitude
                 `,
-                [body, postType, title, category, id, req.user.id]
+                [
+                    body,
+                    postType,
+                    title,
+                    category,
+                    address,
+                    latitude,
+                    longitude,
+                    id,
+                    req.user.id,
+                ]
             );
 
             if (!rows.length) {
@@ -2163,28 +2438,75 @@ app.delete(
 
 app.get(
     '/api/map/places',
-    async (_req, res, next) => {
+    auth,
+    async (req, res, next) => {
         try {
-            const { rows } =
-                await pool.query(`
-                    SELECT
-                        id,
-                        name,
-                        type,
-                        latitude,
-                        longitude,
-                        description
-                    FROM map_places
-                    ORDER BY id
-                `);
+            const { rows } = await pool.query(
+                `
+                SELECT
+                    'place' AS source,
+                    id::text AS id,
+                    name AS title,
+                    type AS category,
+                    description,
+                    latitude,
+                    longitude,
+                    NULL::text AS address,
+                    NULL::text AS status,
+                    NULL::text AS author,
+                    FALSE AS is_owner
+                FROM map_places
+
+                UNION ALL
+
+                SELECT
+                    'need' AS source,
+                    n.id::text AS id,
+                    n.description AS title,
+                    n.category,
+                    n.description,
+                    n.latitude,
+                    n.longitude,
+                    n.address,
+                    n.status,
+                    u.name AS author,
+                    (n.user_id = $1) AS is_owner
+                FROM needs n
+                JOIN users u ON u.id = n.user_id
+                WHERE n.latitude IS NOT NULL
+                  AND n.longitude IS NOT NULL
+                  AND n.status = 'open'
+
+                UNION ALL
+
+                SELECT
+                    'community' AS source,
+                    p.id::text AS id,
+                    COALESCE(p.title, p.body) AS title,
+                    p.post_type AS category,
+                    p.body AS description,
+                    p.latitude,
+                    p.longitude,
+                    p.address,
+                    p.status,
+                    u.name AS author,
+                    (p.user_id = $1) AS is_owner
+                FROM community_posts p
+                JOIN users u ON u.id = p.user_id
+                WHERE p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                  AND p.status = 'active'
+
+                ORDER BY source, id
+                `,
+                [req.user.id]
+            );
 
             res.json(
-                rows.map((place) => ({
-                    ...place,
-                    latitude:
-                        Number(place.latitude),
-                    longitude:
-                        Number(place.longitude),
+                rows.map((item) => ({
+                    ...item,
+                    latitude: Number(item.latitude),
+                    longitude: Number(item.longitude),
                 }))
             );
         } catch (error) {

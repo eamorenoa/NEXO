@@ -27,6 +27,9 @@ export type CommunityPost = {
   author?: string;
   created_at?: string;
   updated_at?: string;
+  address?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 };
 
 export type CreateCommunityPostInput = {
@@ -34,4 +37,7 @@ export type CreateCommunityPostInput = {
   post_type?: CommunityPostType;
   title?: string;
   category?: string;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };

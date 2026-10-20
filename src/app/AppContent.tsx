@@ -220,6 +220,7 @@ export function AppContent() {
     home: (
       <HomeView
         user={user}
+        token={token}
         go={setScreen}
         onEmergency={() =>
           setScreen('emergency')

@@ -16,4 +16,7 @@ export type Need = {
   author?: string;
   created_at?: string;
   is_owner?: boolean;
+  address?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 };

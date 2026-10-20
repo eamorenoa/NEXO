@@ -93,8 +93,12 @@ function WebMap({
       places.map((place) => ({
         lat: Number(place.latitude),
         lng: Number(place.longitude),
-        name: String(place.name ?? ''),
+        title: String(place.title ?? 'Publicación comunitaria'),
+        category: String(place.category ?? ''),
+        source: String(place.source ?? 'place'),
         description: String(place.description ?? ''),
+        address: String(place.address ?? ''),
+        author: String(place.author ?? ''),
       }))
     );
 
@@ -194,7 +198,7 @@ function WebMap({
               const popup = document.createElement('div');
               const title = document.createElement('strong');
 
-              title.textContent = place.name;
+              title.textContent = place.title;
               popup.appendChild(title);
 
               if (place.description) {
@@ -205,9 +209,22 @@ function WebMap({
                 popup.appendChild(description);
               }
 
-              L.marker([place.lat, place.lng])
-                .addTo(map)
-                .bindPopup(popup);
+                const markerColors = {
+                place: '#2563eb',
+                need: '#dc2626',
+                community: '#16a34a',
+              };
+
+              const marker = L.circleMarker([place.lat, place.lng], {
+                radius: 8,
+                color: '#ffffff',
+                weight: 2,
+                fillColor:
+                  markerColors[place.source] || markerColors.place,
+                fillOpacity: 1,
+              });
+
+              marker.addTo(map).bindPopup(popup);
             });
           </script>
         </body>
@@ -335,31 +352,35 @@ export function MapView() {
       longitude: location.coords.longitude,
     }
     : DEFAULT_LOCATION;
-
   const placesWithDistance = useMemo(() => {
     return vm.places.map((place: any) => {
-      const distance = calculateDistance(
-        center.latitude,
-        center.longitude,
-        Number(place.latitude),
-        Number(place.longitude)
-      );
+      const distance = location
+        ? calculateDistance(
+          location.coords.latitude,
+          location.coords.longitude,
+          Number(place.latitude),
+          Number(place.longitude)
+        )
+        : null;
 
       return {
         ...place,
         distance,
       };
     });
-  }, [vm.places, center.latitude, center.longitude]);
+  }, [vm.places, location]);
 
   const filteredPlaces = useMemo(() => {
     return placesWithDistance
       .filter((place: any) => {
         const categoryMatches =
           selectedCategory === 'all' ||
-          place.type === selectedCategory;
+          place.category === selectedCategory;
 
-        const distanceMatches = place.distance <= maxDistance;
+        const distanceMatches =
+          location !== null &&
+          place.distance !== null &&
+          place.distance <= maxDistance;
 
         return categoryMatches && distanceMatches;
       })
@@ -554,25 +575,29 @@ export function MapView() {
             >
               <View style={styles.placeIcon}>
                 <Text style={styles.placeIconText}>
-                  {place.type === 'help'
+                  {place.source === 'need'
                     ? '🆘'
-                    : place.type === 'service'
-                      ? '🏥'
-                      : place.type === 'job'
-                        ? '💼'
-                        : place.type === 'donation'
-                          ? '🎁'
-                          : place.type === 'report'
-                            ? '📢'
+                    : place.source === 'community'
+                      ? '🤝'
+                      : place.category === 'service'
+                        ? '🏥'
+                        : place.category === 'job'
+                          ? '💼'
+                          : place.category === 'donation'
+                            ? '🎁'
                             : '📍'}
                 </Text>
               </View>
 
               <View style={styles.placeInfo}>
-                <Text style={styles.placeName}>{place.name}</Text>
+                <Text style={styles.placeName}>{place.title}</Text>
 
                 <Text style={styles.placeCategory}>
-                  {getCategoryLabel(place.type)}
+                  {place.source === 'need'
+                    ? 'Necesidad'
+                    : place.source === 'community'
+                      ? 'Comunidad'
+                      : getCategoryLabel(place.category)}
                 </Text>
 
                 {place.description && (
@@ -600,11 +625,15 @@ export function MapView() {
             <View style={styles.detailHeader}>
               <View style={styles.detailTitleContainer}>
                 <Text style={styles.detailTitle}>
-                  {selectedPlace.name}
+                  {selectedPlace.title}
                 </Text>
 
                 <Text style={styles.detailCategory}>
-                  {getCategoryLabel(selectedPlace.type)}
+                  {selectedPlace.source === 'need'
+                    ? 'Necesidad'
+                    : selectedPlace.source === 'community'
+                      ? 'Comunidad'
+                      : getCategoryLabel(selectedPlace.category)}
                 </Text>
               </View>
 
