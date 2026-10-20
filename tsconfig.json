@@ -3,6 +3,8 @@
   "compilerOptions": {},
   "exclude": [
     "backups/**",
+    "backup/**",
+    "NEXO-github/**",
     "node_modules"
   ]
 }
