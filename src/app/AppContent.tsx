@@ -252,6 +252,7 @@ export function AppContent() {
     profile: (
       <ProfileView
         user={user}
+        token={token}
         logout={logout}
       />
     ),
@@ -389,20 +390,16 @@ const s = StyleSheet.create({
 
   fab: {
     position: 'absolute',
-    bottom: 38,
-    left: '50%',
-    marginLeft: -27,
+    bottom: 92,
+    right: 20,
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor:
-      colors.primary,
+    backgroundColor: colors.primary,
     alignItems: 'center',
-    justifyContent:
-      'center',
+    justifyContent: 'center',
     borderWidth: 4,
-    borderColor:
-      colors.background,
+    borderColor: colors.background,
     elevation: 9,
   },
 
