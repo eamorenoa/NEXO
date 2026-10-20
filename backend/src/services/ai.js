@@ -78,21 +78,39 @@ export async function askAI(message) {
     throw new Error('La consulta no puede superar los 4000 caracteres.');
   }
 
-  if (!client) {
-    return getLocalAnswer(cleanMessage);
-  }
+  const baseUrl = (
+    process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
+  ).replace(/\/+$/, '');
+
+  const model = process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
 
   try {
-    const result = await client.responses.create({
-      model: process.env.OPENAI_MODEL || 'gpt-5.6-luna',
-      instructions: SYSTEM_PROMPT,
-      input: cleanMessage,
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(300000),
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: cleanMessage },
+        ],
+        options: {
+          temperature: 0.3,
+        },
+      }),
     });
 
-    const answer = result.output_text?.trim();
+    if (!response.ok) {
+      throw new Error(`Ollama respondió HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+    const answer = result.message?.content?.trim();
 
     if (!answer) {
-      return getLocalAnswer(cleanMessage);
+      throw new Error('Ollama no devolvió una respuesta.');
     }
 
     const classified = classifyNeed(cleanMessage);
@@ -101,12 +119,12 @@ export async function askAI(message) {
       answer,
       category: classified.category,
       confidence: classified.confidence,
-      source: 'openai',
+      source: 'ollama',
     };
   } catch (error) {
     console.error(
-      'NEXO AI: no fue posible completar la consulta.',
-      error?.status || error?.name || 'Error desconocido',
+      'NEXO AI: Ollama no pudo completar la consulta.',
+      error?.cause?.code || error?.name || error?.message || 'Error desconocido',
     );
 
     return {
