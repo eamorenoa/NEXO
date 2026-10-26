@@ -13,7 +13,10 @@ import {
 } from 'react-native';
 
 import * as DocumentPicker from 'expo-document-picker';
+import type { DocumentPickerAsset } from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { File } from 'expo-file-system';
 
 import type { User } from '../models/User';
 import { colors } from '../shared/theme';
@@ -26,18 +29,6 @@ type ProfileViewProps = {
     logout: () => void;
 };
 
-function getRoleLabel(role?: string): string {
-    const normalized = (role || '').trim().toLowerCase();
-
-    const labels: Record<string, string> = {
-        citizen: 'Ciudadano',
-        communityadmin: 'Administrador comunitario',
-        institution: 'Institución',
-    };
-
-    return labels[normalized] || role || 'Ciudadano';
-}
-
 export function ProfileView({ user, token, logout }: ProfileViewProps) {
     const [profile, setProfile] = useState<Profile | null>(null);
     const [form, setForm] = useState<EditableProfile>({
@@ -48,15 +39,14 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
     });
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
-    const [editingProfile, setEditingProfile] = useState(false);
     const [uploadingAvatar, setUploadingAvatar] = useState(false);
     const [removingAvatar, setRemovingAvatar] = useState(false);
 
     const [resumes, setResumes] = useState<Resume[]>([]);
-    const [loadingResumes, setLoadingResumes] = useState(false);
-    const [uploadingResume, setUploadingResume] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [uploading, setUploading] = useState(false);
     const [busyResumeId, setBusyResumeId] = useState<number | null>(null);
-    const [resumeError, setResumeError] = useState('');
+    const [error, setError] = useState('');
 
     const showMessage = (title: string, message: string) => {
         if (Platform.OS === 'web') {
@@ -85,8 +75,8 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
             });
         } catch (err) {
             showMessage(
-                'No se pudo cargar el perfil',
-                err instanceof Error ? err.message : 'Inténtelo nuevamente.',
+                'Error al cargar el perfil',
+                err instanceof Error ? err.message : 'No fue posible cargar sus datos personales.',
             );
         } finally {
             setLoadingProfile(false);
@@ -99,16 +89,16 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
             return;
         }
 
-        setLoadingResumes(true);
-        setResumeError('');
+        setLoading(true);
+        setError('');
         try {
             setResumes(await ResumeService.list(token));
         } catch (err) {
-            setResumeError(
+            setError(
                 err instanceof Error ? err.message : 'No fue posible cargar las hojas de vida.',
             );
         } finally {
-            setLoadingResumes(false);
+            setLoading(false);
         }
     }, [token]);
 
@@ -140,7 +130,6 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
                 phone: result.phone || '',
                 city: result.city || '',
             });
-            setEditingProfile(false);
             showMessage('Perfil actualizado', 'Sus datos personales se guardaron correctamente.');
         } catch (err) {
             showMessage(
@@ -152,16 +141,6 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
         }
     };
 
-    const cancelProfileEdit = () => {
-        setForm({
-            name: profile?.name || user.name || '',
-            bio: profile?.bio || '',
-            phone: profile?.phone || '',
-            city: profile?.city || '',
-        });
-        setEditingProfile(false);
-    };
-
     const chooseAvatar = async () => {
         if (!token) {
             showMessage('Sesión requerida', 'Inicie sesión para cambiar su fotografía.');
@@ -171,7 +150,10 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
         try {
             const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
             if (!permission.granted) {
-                showMessage('Permiso requerido', 'Autorice el acceso a sus fotografías para seleccionar una imagen.');
+                showMessage(
+                    'Permiso requerido',
+                    'Autorice el acceso a sus fotografías para seleccionar una imagen.',
+                );
                 return;
             }
 
@@ -179,30 +161,101 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
                 mediaTypes: ['images'],
                 allowsEditing: true,
                 aspect: [1, 1],
-                quality: 0.8,
+                quality: 1,
             });
 
             if (result.canceled || !result.assets[0]) return;
 
             const asset = result.assets[0];
-            if (asset.fileSize && asset.fileSize > 2 * 1024 * 1024) {
-                showMessage('Imagen demasiado grande', 'La fotografía no puede superar los 2 MB.');
-                return;
-            }
+            const originalMimeType = asset.mimeType || 'image/jpeg';
 
-            const mimeType = asset.mimeType || 'image/jpeg';
-            if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
-                showMessage('Formato no válido', 'Seleccione una imagen JPG, PNG o WEBP.');
+            if (
+                ![
+                    'image/jpeg',
+                    'image/png',
+                    'image/webp',
+                    'image/heic',
+                    'image/heif',
+                ].includes(originalMimeType)
+            ) {
+                showMessage(
+                    'Formato no válido',
+                    'Seleccione una fotografía JPG, PNG, WEBP o HEIC.',
+                );
                 return;
             }
 
             setUploadingAvatar(true);
+
+            let uri = asset.uri;
+            let fileName = asset.fileName || 'foto-perfil.jpg';
+            let mimeType = originalMimeType;
+            let file = asset.file;
+
+            if (Platform.OS !== 'web') {
+                const widths = [1600, 1200, 1000, 800, 600, 400];
+                const qualities = [0.75, 0.6, 0.45, 0.3];
+                let bestUri = '';
+                let bestSize = Number.POSITIVE_INFINITY;
+                let acceptable = false;
+
+                for (const width of widths) {
+                    for (const quality of qualities) {
+                        const compressed = await ImageManipulator.manipulateAsync(
+                            asset.uri,
+                            [{ resize: { width } }],
+                            {
+                                compress: quality,
+                                format: ImageManipulator.SaveFormat.JPEG,
+                            },
+                        );
+
+                        const compressedFile = new File(compressed.uri);
+                        if (!compressedFile.exists || compressedFile.size <= 0) continue;
+
+                        if (compressedFile.size < bestSize) {
+                            bestUri = compressed.uri;
+                            bestSize = compressedFile.size;
+                        }
+
+                        if (compressedFile.size < 1.8 * 1024 * 1024) {
+                            bestUri = compressed.uri;
+                            bestSize = compressedFile.size;
+                            acceptable = true;
+                            break;
+                        }
+                    }
+
+                    if (acceptable) break;
+                }
+
+                if (!bestUri || bestSize >= 2 * 1024 * 1024) {
+                    showMessage(
+                        'No se pudo comprimir la imagen',
+                        'Seleccione otra fotografía e inténtelo nuevamente.',
+                    );
+                    return;
+                }
+
+                uri = bestUri;
+                fileName = 'foto-perfil.jpg';
+                mimeType = 'image/jpeg';
+                file = undefined;
+            } else if (asset.fileSize && asset.fileSize > 2 * 1024 * 1024) {
+                showMessage(
+                    'Imagen demasiado grande',
+                    'En la versión web, seleccione una fotografía que no supere los 2 MB.',
+                );
+                return;
+            }
+
             const updated = await ProfileService.uploadAvatar(token, {
-                uri: asset.uri,
-                fileName: asset.fileName || `foto-perfil.${mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
+                uri,
+                fileName,
                 mimeType,
-                file: asset.file,
+                file,
             });
+
             setProfile(updated);
             showMessage('Fotografía actualizada', 'Su fotografía de perfil se guardó correctamente.');
         } catch (err) {
@@ -235,7 +288,9 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
         };
 
         if (Platform.OS === 'web') {
-            if (window.confirm('¿Desea eliminar su fotografía de perfil?')) void performRemove();
+            if (window.confirm('¿Desea eliminar su fotografía de perfil?')) {
+                void performRemove();
+            }
             return;
         }
 
@@ -252,16 +307,43 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
         }
 
         try {
-            const result = await DocumentPicker.getDocumentAsync({
-                type: 'application/pdf',
-                copyToCacheDirectory: true,
-                multiple: false,
-            });
-            if (result.canceled || !result.assets[0]) return;
+            let asset: DocumentPickerAsset | File;
 
-            setUploadingResume(true);
-            setResumeError('');
-            await ResumeService.upload(token, result.assets[0]);
+            if (Platform.OS === 'web') {
+                const result = await DocumentPicker.getDocumentAsync({
+                    type: 'application/pdf',
+                    multiple: false,
+                });
+
+                if (result.canceled) return;
+
+                const selectedAsset = result.assets[0];
+                if (!selectedAsset) return;
+
+                asset = selectedAsset;
+            } else {
+                const result = await File.pickFileAsync({
+                    mimeTypes: ['application/pdf'],
+                    multipleFiles: false,
+                });
+
+                if (result.canceled) return;
+
+                console.log('[NEXO PDF] Resultado del selector:', {
+                    name: result.result.name,
+                    extension: result.result.extension,
+                    uri: result.result.uri,
+                    size: result.result.size,
+                    exists: result.result.exists,
+                });
+
+                asset = result.result;
+            }
+
+            setUploading(true);
+            setError('');
+
+            await ResumeService.upload(token, asset);
             await loadResumes();
             showMessage('Carga completada', 'La hoja de vida se guardó correctamente.');
         } catch (err) {
@@ -270,14 +352,14 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
                 err instanceof Error ? err.message : 'Inténtelo nuevamente.',
             );
         } finally {
-            setUploadingResume(false);
+            setUploading(false);
         }
     };
 
     const downloadResume = async (resume: Resume) => {
         if (!token) return;
         setBusyResumeId(resume.id);
-        setResumeError('');
+        setError('');
         try {
             await ResumeService.download(token, resume.id, resume.original_name);
         } catch (err) {
@@ -295,7 +377,7 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
 
         const performDelete = async () => {
             setBusyResumeId(resume.id);
-            setResumeError('');
+            setError('');
             try {
                 await ResumeService.remove(token, resume.id);
                 await loadResumes();
@@ -311,7 +393,9 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
         };
 
         if (Platform.OS === 'web') {
-            if (window.confirm(`¿Desea eliminar "${resume.original_name}"?`)) void performDelete();
+            if (window.confirm(`¿Desea eliminar "${resume.original_name}"?`)) {
+                void performDelete();
+            }
             return;
         }
 
@@ -324,913 +408,433 @@ export function ProfileView({ user, token, logout }: ProfileViewProps) {
     const displayName = profile?.name || user.name || 'Usuario';
 
     return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-            <View style={styles.hero}>
-                <View style={styles.heroDecorOne} />
-                <View style={styles.heroDecorTwo} />
-                <View style={styles.heroTopRow}>
-                    <View>
-                        <Text style={styles.eyebrow}>ESPACIO PERSONAL</Text>
-                        <Text style={styles.title}>¡Hola!</Text>
-                        <Text style={styles.heroSubtitle}>Tu perfil en la comunidad NEXO</Text>
-                    </View>
-                    <View style={styles.heroIcon}>
-                        <Text style={styles.heroIconText}>✦</Text>
-                    </View>
-                </View>
-                <View style={styles.heroIllustration}>
-                    <View style={styles.illustrationBubble}>
-                        <Text style={styles.illustrationEmoji}>☁️</Text>
-                    </View>
-                    <View style={styles.illustrationPerson}>
-                        <Text style={styles.personEmoji}>🧑🏻‍💻</Text>
-                    </View>
-                    <View style={styles.illustrationSparkle}><Text style={styles.sparkleText}>✦</Text></View>
-                    <View style={styles.illustrationDot} />
-                </View>
-            </View>
+        <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+            <Text style={styles.title}>Mi perfil</Text>
 
-            <View style={styles.profileCard}>
-                <View style={styles.profileHeader}>
-                    <View style={styles.avatarWrap}>
-                        {profile?.avatar ? (
-                            <Image source={{ uri: profile.avatar }} style={styles.avatarImage} />
-                        ) : (
-                            <View style={styles.avatarPlaceholder}>
-                                <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
-                            </View>
-                        )}
-                        <Pressable
-                            onPress={() => void chooseAvatar()}
-                            disabled={!token || uploadingAvatar || removingAvatar}
-                            style={styles.cameraBadge}
-                            accessibilityLabel="Cambiar fotografía"
-                        >
-                            {uploadingAvatar ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.cameraEmoji}>📷</Text>}
-                        </Pressable>
-                    </View>
-                    <View style={styles.profileIdentity}>
-                        <Text style={styles.name}>{displayName}</Text>
-                        <Text style={styles.email}>{profile?.email || user.email}</Text>
-                        <View style={styles.rolePill}>
-                            <Text style={styles.roleText}>{getRoleLabel(profile?.role || user.role)}</Text>
-                        </View>
-                    </View>
+            <View style={styles.card}>
+                <View style={styles.avatar}>
+                    {profile?.avatar ? (
+                        <Image source={{ uri: profile.avatar }} style={styles.avatarImage} />
+                    ) : (
+                        <Text style={styles.avatarText}>
+                            {displayName.charAt(0).toUpperCase()}
+                        </Text>
+                    )}
                 </View>
-                <View style={styles.profileActions}>
+
+                <Text style={styles.name}>{displayName}</Text>
+                <Text style={styles.email}>{profile?.email || user.email}</Text>
+                <Text style={styles.role}>{profile?.role || user.role || 'citizen'}</Text>
+
+                <View style={styles.avatarActions}>
                     <Pressable
                         onPress={() => void chooseAvatar()}
-                        disabled={!token || uploadingAvatar}
-                        style={({ pressed }) => [styles.softButton, pressed && styles.pressed]}
+                        disabled={!token || uploadingAvatar || removingAvatar}
+                        style={({ pressed }) => [
+                            styles.primaryButton,
+                            styles.avatarButton,
+                            (!token || uploadingAvatar || removingAvatar) && styles.disabledButton,
+                            pressed && styles.pressedButton,
+                        ]}
                     >
-                        <Text style={styles.softButtonEmoji}>🖼️</Text>
-                        <Text style={styles.softButtonText}>Cambiar foto</Text>
+                        {uploadingAvatar ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.primaryButtonText}>
+                                {profile?.avatar ? 'Cambiar fotografía' : 'Añadir fotografía'}
+                            </Text>
+                        )}
                     </Pressable>
-                    {profile?.avatar && (
+
+                    {!!profile?.avatar && (
                         <Pressable
                             onPress={removeAvatar}
                             disabled={removingAvatar || uploadingAvatar}
-                            style={({ pressed }) => [styles.softDangerButton, pressed && styles.pressed]}
+                            style={[styles.deleteButton, styles.avatarButton]}
                         >
-                            <Text style={styles.softButtonEmoji}>🗑️</Text>
-                            <Text style={styles.softDangerText}>Quitar foto</Text>
+                            {removingAvatar ? (
+                                <ActivityIndicator />
+                            ) : (
+                                <Text style={styles.deleteButtonText}>Eliminar foto</Text>
+                            )}
                         </Pressable>
                     )}
                 </View>
             </View>
 
-            <View style={styles.sectionHeading}>
-                <View>
-                    <Text style={styles.sectionTitle}>Información personal</Text>
-                    <Text style={styles.sectionSubtitle}>Cuéntale a la comunidad sobre ti</Text>
-                </View>
-                <View style={styles.headingIcon}><Text style={styles.headingIconText}>✎</Text></View>
-            </View>
-
-            <View style={styles.infoCard}>
+            <View style={styles.card}>
+                <Text style={styles.section}>Datos personales</Text>
                 {loadingProfile ? (
                     <ActivityIndicator style={styles.loader} />
-                ) : !editingProfile ? (
-                    <>
-                        <View style={styles.detailRow}>
-                            <View style={[styles.fieldIcon, styles.blueIcon]}><Text>👤</Text></View>
-                            <View style={styles.detailCopy}>
-                                <Text style={styles.detailLabel}>Nombre completo</Text>
-                                <Text style={styles.detailValue}>{profile?.name || user.name || 'Sin especificar'}</Text>
-                            </View>
-                        </View>
-                        <View style={styles.detailRow}>
-                            <View style={[styles.fieldIcon, styles.purpleIcon]}><Text>✉️</Text></View>
-                            <View style={styles.detailCopy}>
-                                <Text style={styles.detailLabel}>Correo electrónico</Text>
-                                <Text style={styles.detailValue}>{profile?.email || user.email}</Text>
-                            </View>
-                        </View>
-                        <View style={styles.detailRow}>
-                            <View style={[styles.fieldIcon, styles.greenIcon]}><Text>📱</Text></View>
-                            <View style={styles.detailCopy}>
-                                <Text style={styles.detailLabel}>Teléfono</Text>
-                                <Text style={styles.detailValue}>{profile?.phone || 'Sin especificar'}</Text>
-                            </View>
-                        </View>
-                        <View style={styles.detailRow}>
-                            <View style={[styles.fieldIcon, styles.orangeIcon]}><Text>📍</Text></View>
-                            <View style={styles.detailCopy}>
-                                <Text style={styles.detailLabel}>Ciudad</Text>
-                                <Text style={styles.detailValue}>{profile?.city || 'Sin especificar'}</Text>
-                            </View>
-                        </View>
-                        <View style={[styles.detailRow, styles.bioDetailRow]}>
-                            <View style={[styles.fieldIcon, styles.pinkIcon]}><Text>💬</Text></View>
-                            <View style={styles.detailCopy}>
-                                <Text style={styles.detailLabel}>Sobre mí</Text>
-                                <Text style={styles.detailValue}>{profile?.bio || 'Aún no has agregado una descripción.'}</Text>
-                            </View>
-                        </View>
-                        <Pressable
-                            onPress={() => setEditingProfile(true)}
-                            disabled={!token}
-                            style={({ pressed }) => [
-                                styles.saveButton,
-                                styles.editInfoButton,
-                                !token && styles.disabledButton,
-                                pressed && styles.pressed,
-                            ]}
-                        >
-                            <Text style={styles.saveButtonText}>✎  Editar información</Text>
-                        </Pressable>
-                    </>
                 ) : (
                     <>
-                        <View style={styles.editingNotice}>
-                            <Text style={styles.editingNoticeText}>Actualiza tus datos aquí. El correo electrónico no se puede modificar.</Text>
-                        </View>
-                        <View style={styles.fieldLabelRow}>
-                            <View style={[styles.fieldIcon, styles.blueIcon]}><Text>👤</Text></View>
-                            <Text style={styles.label}>Nombre completo</Text>
-                        </View>
-                        <TextInput value={form.name} onChangeText={(value) => changeField('name', value)} placeholder="Tu nombre completo" maxLength={120} editable={!!token && !savingProfile} style={styles.input} />
-                        <View style={styles.fieldLabelRow}>
-                            <View style={[styles.fieldIcon, styles.purpleIcon]}><Text>✉️</Text></View>
-                            <Text style={styles.label}>Correo electrónico</Text>
-                        </View>
-                        <TextInput value={profile?.email || user.email} editable={false} style={[styles.input, styles.readOnlyInput]} keyboardType="email-address" />
-                        <View style={styles.fieldLabelRow}>
-                            <View style={[styles.fieldIcon, styles.greenIcon]}><Text>📱</Text></View>
-                            <Text style={styles.label}>Teléfono</Text>
-                        </View>
-                        <TextInput value={form.phone} onChangeText={(value) => changeField('phone', value)} placeholder="Tu número de contacto" maxLength={30} keyboardType="phone-pad" editable={!!token && !savingProfile} style={styles.input} />
-                        <View style={styles.fieldLabelRow}>
-                            <View style={[styles.fieldIcon, styles.orangeIcon]}><Text>📍</Text></View>
-                            <Text style={styles.label}>Ciudad</Text>
-                        </View>
-                        <TextInput value={form.city} onChangeText={(value) => changeField('city', value)} placeholder="Ciudad donde vives" maxLength={100} editable={!!token && !savingProfile} style={styles.input} />
-                        <View style={styles.fieldLabelRow}>
-                            <View style={[styles.fieldIcon, styles.pinkIcon]}><Text>💬</Text></View>
-                            <Text style={styles.label}>Sobre mí</Text>
-                        </View>
-                        <TextInput value={form.bio} onChangeText={(value) => changeField('bio', value)} placeholder="Comparte tus intereses, habilidades o cómo puedes aportar a la comunidad..." maxLength={500} multiline numberOfLines={4} textAlignVertical="top" editable={!!token && !savingProfile} style={[styles.input, styles.bioInput]} />
+                        <Text style={styles.label}>Nombre completo</Text>
+                        <TextInput
+                            value={form.name}
+                            onChangeText={(value) => changeField('name', value)}
+                            placeholder="Su nombre completo"
+                            maxLength={120}
+                            editable={!!token && !savingProfile}
+                            style={styles.input}
+                        />
+
+                        <Text style={styles.label}>Correo electrónico</Text>
+                        <TextInput
+                            value={profile?.email || user.email}
+                            editable={false}
+                            style={[styles.input, styles.readOnlyInput]}
+                            keyboardType="email-address"
+                        />
+
+                        <Text style={styles.label}>Teléfono</Text>
+                        <TextInput
+                            value={form.phone}
+                            onChangeText={(value) => changeField('phone', value)}
+                            placeholder="Su número de contacto"
+                            maxLength={30}
+                            keyboardType="phone-pad"
+                            editable={!!token && !savingProfile}
+                            style={styles.input}
+                        />
+
+                        <Text style={styles.label}>Ciudad</Text>
+                        <TextInput
+                            value={form.city}
+                            onChangeText={(value) => changeField('city', value)}
+                            placeholder="Ciudad de residencia"
+                            maxLength={100}
+                            editable={!!token && !savingProfile}
+                            style={styles.input}
+                        />
+
+                        <Text style={styles.label}>Sobre mí</Text>
+                        <TextInput
+                            value={form.bio}
+                            onChangeText={(value) => changeField('bio', value)}
+                            placeholder="Cuéntenos algo sobre usted"
+                            maxLength={500}
+                            multiline
+                            numberOfLines={4}
+                            textAlignVertical="top"
+                            editable={!!token && !savingProfile}
+                            style={[styles.input, styles.bioInput]}
+                        />
                         <Text style={styles.characterCount}>{form.bio.length}/500 caracteres</Text>
+
                         <Pressable
                             onPress={() => void saveProfile()}
                             disabled={!token || savingProfile || loadingProfile}
                             style={({ pressed }) => [
-                                styles.saveButton,
+                                styles.primaryButton,
                                 (!token || savingProfile || loadingProfile) && styles.disabledButton,
-                                pressed && styles.pressed,
+                                pressed && styles.pressedButton,
                             ]}
                         >
-                            {savingProfile ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveButtonText}>✓  Guardar cambios</Text>}
-                        </Pressable>
-                        <Pressable onPress={cancelProfileEdit} disabled={savingProfile} style={({ pressed }) => [styles.cancelEditButton, pressed && styles.pressed]}>
-                            <Text style={styles.cancelEditText}>Cancelar</Text>
+                            {savingProfile ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <Text style={styles.primaryButtonText}>Guardar datos personales</Text>
+                            )}
                         </Pressable>
                     </>
                 )}
             </View>
 
-            <View style={styles.sectionHeading}>
-                <View>
-                    <Text style={styles.sectionTitle}>Mis hojas de vida</Text>
-                    <Text style={styles.sectionSubtitle}>Tus documentos listos cuando los necesites</Text>
-                </View>
-                <View style={[styles.headingIcon, styles.pdfHeadingIcon]}><Text style={styles.headingIconText}>▤</Text></View>
-            </View>
-
-            <View style={styles.resumeCard}>
-                <View style={styles.resumeBanner}>
-                    <View style={styles.resumeBannerIcon}><Text style={styles.resumeBannerEmoji}>📁</Text></View>
-                    <View style={styles.resumeBannerTextWrap}>
-                        <Text style={styles.resumeBannerTitle}>Tu experiencia cuenta</Text>
-                        <Text style={styles.resumeBannerText}>Guarda tus hojas de vida en PDF, hasta 5 MB por archivo.</Text>
-                    </View>
-                </View>
+            <View style={styles.card}>
+                <Text style={styles.section}>Mis hojas de vida</Text>
+                <Text style={styles.description}>
+                    Guarde sus documentos PDF para tenerlos disponibles en NEXO. El límite por archivo es de 5 MB.
+                </Text>
 
                 <Pressable
                     onPress={() => void uploadResume()}
-                    disabled={!token || uploadingResume}
+                    disabled={!token || uploading}
                     style={({ pressed }) => [
-                        styles.uploadButton,
-                        (!token || uploadingResume) && styles.disabledButton,
-                        pressed && styles.pressed,
+                        styles.primaryButton,
+                        (!token || uploading) && styles.disabledButton,
+                        pressed && styles.pressedButton,
                     ]}
                 >
-                    {uploadingResume ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.uploadButtonText}>＋  Subir hoja de vida PDF</Text>}
+                    {uploading ? (
+                        <ActivityIndicator color="#fff" />
+                    ) : (
+                        <Text style={styles.primaryButtonText}>Seleccionar hoja de vida PDF</Text>
+                    )}
                 </Pressable>
 
-                {loadingResumes && <ActivityIndicator style={styles.loader} />}
-                {!!resumeError && <Text style={styles.error}>{resumeError}</Text>}
+                {loading && <ActivityIndicator style={styles.loader} />}
+                {!!error && <Text style={styles.error}>{error}</Text>}
 
-                {!loadingResumes && resumes.length === 0 && (
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyEmoji}>📄</Text>
-                        <Text style={styles.emptyTitle}>Todavía no tienes documentos</Text>
-                        <Text style={styles.emptyText}>Sube tu hoja de vida para tenerla disponible en NEXO.</Text>
-                    </View>
+                {!loading && resumes.length === 0 && (
+                    <Text style={styles.empty}>Todavía no tiene hojas de vida guardadas.</Text>
                 )}
 
                 {resumes.map((resume) => (
                     <View key={resume.id} style={styles.resumeItem}>
-                        <View style={styles.pdfIcon}><Text style={styles.pdfIconText}>PDF</Text></View>
                         <View style={styles.resumeInfo}>
-                            <Text style={styles.resumeName} numberOfLines={2}>{resume.original_name}</Text>
-                            <Text style={styles.resumeMeta}>{(resume.file_size / 1024).toFixed(0)} KB · {new Date(resume.created_at).toLocaleDateString()}</Text>
+                            <Text style={styles.resumeName} numberOfLines={2}>
+                                {resume.original_name}
+                            </Text>
+                            <Text style={styles.resumeMeta}>
+                                {(resume.file_size / 1024).toFixed(0)} KB
+                            </Text>
                         </View>
-                        <View style={styles.resumeActions}>
+
+                        <View style={styles.actions}>
                             <Pressable
                                 disabled={busyResumeId === resume.id}
                                 onPress={() => void downloadResume(resume)}
-                                style={styles.iconAction}
-                                accessibilityLabel="Descargar hoja de vida"
+                                style={styles.secondaryButton}
                             >
-                                <Text style={styles.actionEmoji}>⬇️</Text>
+                                <Text style={styles.secondaryButtonText}>
+                                    {busyResumeId === resume.id ? 'Procesando…' : 'Descargar'}
+                                </Text>
                             </Pressable>
+
                             <Pressable
                                 disabled={busyResumeId === resume.id}
                                 onPress={() => deleteResume(resume)}
-                                style={styles.iconAction}
-                                accessibilityLabel="Eliminar hoja de vida"
+                                style={styles.deleteButton}
                             >
-                                <Text style={styles.actionEmoji}>⋮</Text>
+                                <Text style={styles.deleteButtonText}>Eliminar</Text>
                             </Pressable>
                         </View>
                     </View>
                 ))}
 
-                <Pressable onPress={() => void loadResumes()} disabled={loadingResumes} style={styles.refreshButton}>
-                    <Text style={styles.refreshText}>↻  Actualizar documentos</Text>
+                <Pressable
+                    onPress={() => void loadResumes()}
+                    disabled={loading}
+                    style={styles.refreshButton}
+                >
+                    <Text style={styles.refreshText}>Actualizar lista</Text>
                 </Pressable>
             </View>
 
-            <View style={styles.trustCard}>
-                <View style={styles.trustIcon}><Text style={styles.trustEmoji}>🛡️</Text></View>
-                <View style={styles.trustCopy}>
-                    <Text style={styles.trustTitle}>Seguridad y confianza</Text>
-                    <Text style={styles.trustText}>Tu cuenta, tus datos y tu participación en la comunidad NEXO.</Text>
-                    <Text style={styles.trustBullet}>• Ubicación controlada</Text>
-                    <Text style={styles.trustBullet}>• Reputación comunitaria</Text>
-                    <Text style={styles.trustBullet}>• Reporte y bloqueo de usuarios</Text>
-                    <Text style={styles.trustBullet}>• Contactos de emergencia</Text>
-                </View>
+            <View style={styles.card}>
+                <Text style={styles.section}>Seguridad y confianza</Text>
+                <Text style={styles.infoText}>• Ubicación controlada</Text>
+                <Text style={styles.infoText}>• Reputación comunitaria</Text>
+                <Text style={styles.infoText}>• Reporte y bloqueo de usuarios</Text>
+                <Text style={styles.infoText}>• Contactos de emergencia</Text>
             </View>
 
-            <Pressable onPress={logout} style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}>
-                <Text style={styles.logout}>↪  Cerrar sesión</Text>
+            <Pressable onPress={logout}>
+                <Text style={styles.logout}>Cerrar sesión</Text>
             </Pressable>
-            <Text style={styles.footer}>NEXO · Conectando personas y oportunidades</Text>
         </ScrollView>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
-        flex: 1,
-        backgroundColor: '#F5F7FF',
+        backgroundColor: colors.background,
     },
     content: {
-        paddingHorizontal: 16,
-        paddingTop: 14,
-        paddingBottom: 125,
-    },
-    hero: {
-        minHeight: 190,
-        borderRadius: 26,
         padding: 20,
-        overflow: 'hidden',
-        backgroundColor: '#E7E8FF',
-        marginBottom: 18,
-    },
-    heroDecorOne: {
-        position: 'absolute',
-        width: 180,
-        height: 180,
-        borderRadius: 90,
-        right: -50,
-        top: -75,
-        backgroundColor: '#D4D8FF',
-    },
-    heroDecorTwo: {
-        position: 'absolute',
-        width: 120,
-        height: 120,
-        borderRadius: 60,
-        right: 70,
-        bottom: -82,
-        backgroundColor: '#D8E8FF',
-    },
-    heroTopRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        zIndex: 1,
-    },
-    eyebrow: {
-        color: '#6557C8',
-        fontSize: 10,
-        fontWeight: '900',
-        letterSpacing: 1.6,
-        marginBottom: 7,
+        paddingBottom: 110,
     },
     title: {
-        color: '#20254B',
         fontSize: 29,
         fontWeight: '900',
+        color: colors.text,
+        marginBottom: 18,
     },
-    heroSubtitle: {
-        color: '#555B83',
-        fontSize: 12,
-        marginTop: 4,
-        maxWidth: 215,
-    },
-    heroIcon: {
-        width: 38,
-        height: 38,
-        borderRadius: 14,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FFFFFFB8',
-    },
-    heroIconText: {
-        color: '#6A5AE0',
-        fontSize: 23,
-        fontWeight: '900',
-    },
-    heroIllustration: {
-        position: 'absolute',
-        right: 20,
-        bottom: 4,
-        width: 125,
-        height: 104,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    illustrationBubble: {
-        position: 'absolute',
-        right: 5,
-        top: 0,
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#FFFFFFA8',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    illustrationEmoji: {
-        fontSize: 23,
-    },
-    illustrationPerson: {
-        position: 'absolute',
-        bottom: 0,
-        left: 17,
-        width: 77,
-        height: 77,
-        borderRadius: 30,
-        backgroundColor: '#B8B5FF',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    personEmoji: {
-        fontSize: 49,
-    },
-    illustrationSparkle: {
-        position: 'absolute',
-        left: 1,
-        top: 23,
-    },
-    sparkleText: {
-        color: '#7868E8',
-        fontSize: 20,
-    },
-    illustrationDot: {
-        position: 'absolute',
-        width: 9,
-        height: 9,
-        borderRadius: 5,
-        right: 0,
-        bottom: 14,
-        backgroundColor: '#F5A7C8',
-    },
-    profileCard: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 23,
-        padding: 18,
-        marginBottom: 22,
+    card: {
+        backgroundColor: '#fff',
         borderWidth: 1,
-        borderColor: '#E9EAF6',
-        shadowColor: '#5B5C9A',
-        shadowOffset: { width: 0, height: 5 },
-        shadowOpacity: 0.07,
-        shadowRadius: 14,
-        elevation: 3,
+        borderColor: colors.border,
+        borderRadius: 18,
+        padding: 20,
+        marginBottom: 12,
     },
-    profileHeader: {
-        flexDirection: 'row',
+    avatar: {
+        width: 96,
+        height: 96,
+        borderRadius: 48,
+        backgroundColor: colors.primarySoft,
         alignItems: 'center',
-        gap: 14,
-    },
-    avatarWrap: {
-        width: 116,
-        height: 116,
-        borderRadius: 35,
-        backgroundColor: '#E9E7FF',
-        padding: 4,
+        justifyContent: 'center',
+        alignSelf: 'center',
+        overflow: 'hidden',
     },
     avatarImage: {
         width: '100%',
         height: '100%',
-        borderRadius: 31,
-    },
-    avatarPlaceholder: {
-        flex: 1,
-        borderRadius: 31,
-        backgroundColor: '#DCD9FF',
-        alignItems: 'center',
-        justifyContent: 'center',
     },
     avatarText: {
-        fontSize: 42,
+        fontSize: 34,
         fontWeight: '900',
-        color: '#6153C7',
+        color: colors.primary,
     },
-    cameraBadge: {
-        position: 'absolute',
-        right: -4,
-        bottom: -4,
-        width: 35,
-        height: 35,
-        borderRadius: 13,
-        backgroundColor: '#5F55E8',
-        borderWidth: 3,
-        borderColor: '#FFFFFF',
-        alignItems: 'center',
+    avatarActions: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
         justifyContent: 'center',
+        gap: 8,
+        marginTop: 14,
     },
-    cameraEmoji: {
-        fontSize: 13,
-    },
-    profileIdentity: {
-        flex: 1,
-        paddingTop: 5,
-        minWidth: 0,
+    avatarButton: {
+        marginBottom: 0,
     },
     name: {
-        color: '#222647',
-        fontSize: 18,
+        fontSize: 19,
         fontWeight: '900',
-        marginBottom: 4,
+        color: colors.text,
+        textAlign: 'center',
+        marginTop: 10,
     },
     email: {
-        color: '#7A7E9B',
-        fontSize: 11,
-    },
-    rolePill: {
-        alignSelf: 'flex-start',
-        maxWidth: '100%',
-        paddingHorizontal: 11,
-        paddingVertical: 6,
-        backgroundColor: '#E9E8FF',
-        borderRadius: 20,
-        marginTop: 9,
-    },
-    roleText: {
-        color: '#5D50C8',
-        fontSize: 11,
-        fontWeight: '800',
-    },
-    profileActions: {
-        flexDirection: 'row',
-        gap: 9,
-        marginTop: 17,
-    },
-    softButton: {
-        flex: 1,
-        minHeight: 42,
-        borderRadius: 13,
-        backgroundColor: '#F0F0FF',
-        flexDirection: 'row',
-        gap: 7,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 8,
-    },
-    softButtonEmoji: {
-        fontSize: 15,
-    },
-    softButtonText: {
-        color: '#5D50C8',
         fontSize: 12,
-        fontWeight: '800',
+        color: colors.muted,
+        textAlign: 'center',
+        marginTop: 3,
     },
-    softDangerButton: {
-        flex: 1,
-        minHeight: 42,
-        borderRadius: 13,
-        backgroundColor: '#FFF0F1',
-        flexDirection: 'row',
-        gap: 7,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 8,
+    role: {
+        alignSelf: 'center',
+        marginTop: 10,
+        color: colors.success,
+        fontWeight: '900',
     },
-    softDangerText: {
-        color: '#C74A61',
-        fontSize: 12,
-        fontWeight: '800',
-    },
-    sectionHeading: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 11,
-        paddingHorizontal: 2,
-    },
-    sectionTitle: {
-        color: '#25294B',
+    section: {
+        fontWeight: '900',
         fontSize: 17,
-        fontWeight: '900',
-    },
-    sectionSubtitle: {
-        color: '#8589A5',
-        fontSize: 11,
-        marginTop: 4,
-    },
-    headingIcon: {
-        width: 39,
-        height: 39,
-        borderRadius: 14,
-        backgroundColor: '#E9E8FF',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    headingIconText: {
-        color: '#6255D2',
-        fontSize: 22,
-        fontWeight: '900',
-    },
-    pdfHeadingIcon: {
-        backgroundColor: '#E1F3FF',
-    },
-    infoCard: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 22,
-        padding: 17,
-        marginBottom: 23,
-        borderWidth: 1,
-        borderColor: '#E9EAF6',
-    },
-    detailRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 12,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F0F1F8',
-    },
-    bioDetailRow: {
-        borderBottomWidth: 0,
-        paddingBottom: 16,
-    },
-    detailCopy: {
-        flex: 1,
-        paddingTop: 1,
-    },
-    detailLabel: {
-        color: '#8589A5',
-        fontSize: 11,
-        fontWeight: '700',
-        marginBottom: 5,
-    },
-    detailValue: {
-        color: '#303453',
-        fontSize: 13,
-        lineHeight: 19,
-        fontWeight: '600',
-    },
-    editInfoButton: {
-        marginTop: 8,
-    },
-    editingNotice: {
-        backgroundColor: '#F0EDFF',
-        borderRadius: 12,
-        padding: 12,
+        color: colors.text,
         marginBottom: 8,
     },
-    editingNoticeText: {
-        color: '#5D50C8',
-        fontSize: 11,
-        lineHeight: 16,
+    description: {
+        fontSize: 13,
+        color: colors.muted,
+        lineHeight: 20,
+        marginBottom: 14,
     },
-    cancelEditButton: {
-        alignItems: 'center',
-        paddingVertical: 12,
-        marginTop: 2,
-    },
-    cancelEditText: {
-        color: '#747895',
-        fontSize: 12,
-        fontWeight: '800',
-    },
-    fieldLabelRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 9,
-        marginTop: 8,
-        marginBottom: 7,
-    },
-    fieldIcon: {
-        width: 30,
-        height: 30,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    blueIcon: { backgroundColor: '#E5F0FF' },
-    purpleIcon: { backgroundColor: '#F0E9FF' },
-    greenIcon: { backgroundColor: '#E2F8EE' },
-    orangeIcon: { backgroundColor: '#FFF0E1' },
-    pinkIcon: { backgroundColor: '#FFE8F1' },
     label: {
-        color: '#3B3F60',
-        fontSize: 12,
-        fontWeight: '800',
+        color: colors.text,
+        fontWeight: '700',
+        fontSize: 13,
+        marginTop: 10,
+        marginBottom: 6,
     },
     input: {
         borderWidth: 1,
-        borderColor: '#E7E9F4',
-        borderRadius: 12,
-        paddingHorizontal: 13,
-        paddingVertical: 12,
-        color: '#292D4D',
-        backgroundColor: '#FAFBFF',
-        fontSize: 13,
+        borderColor: colors.border,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 11,
+        color: colors.text,
+        backgroundColor: '#fff',
+        fontSize: 14,
     },
     readOnlyInput: {
-        backgroundColor: '#F0F1F7',
-        color: '#8589A5',
+        backgroundColor: '#F3F4F6',
+        color: colors.muted,
     },
     bioInput: {
         minHeight: 100,
     },
     characterCount: {
-        color: '#9296AF',
-        fontSize: 10,
+        color: colors.muted,
+        fontSize: 11,
         textAlign: 'right',
-        marginTop: 5,
+        marginTop: 4,
         marginBottom: 12,
     },
-    saveButton: {
-        backgroundColor: '#6257E8',
-        borderRadius: 14,
-        padding: 15,
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 49,
-        shadowColor: '#6257E8',
-        shadowOffset: { width: 0, height: 5 },
-        shadowOpacity: 0.18,
-        shadowRadius: 8,
-        elevation: 3,
-    },
-    saveButtonText: {
-        color: '#FFFFFF',
-        fontWeight: '900',
-        fontSize: 13,
-    },
-    resumeCard: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 22,
-        padding: 16,
-        marginBottom: 19,
-        borderWidth: 1,
-        borderColor: '#E9EAF6',
-    },
-    resumeBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 13,
-        borderRadius: 17,
-        backgroundColor: '#F0EDFF',
-        marginBottom: 14,
-        gap: 12,
-    },
-    resumeBannerIcon: {
-        width: 52,
-        height: 52,
-        borderRadius: 17,
-        backgroundColor: '#DDD8FF',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    resumeBannerEmoji: {
-        fontSize: 28,
-    },
-    resumeBannerTextWrap: {
-        flex: 1,
-    },
-    resumeBannerTitle: {
-        color: '#3C347F',
-        fontSize: 13,
-        fontWeight: '900',
-        marginBottom: 4,
-    },
-    resumeBannerText: {
-        color: '#6E6998',
-        fontSize: 11,
-        lineHeight: 16,
-    },
-    uploadButton: {
-        backgroundColor: '#6257E8',
-        borderRadius: 13,
+    primaryButton: {
+        backgroundColor: colors.primary,
+        borderRadius: 12,
         padding: 14,
         alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 47,
-        marginBottom: 8,
+        marginBottom: 12,
     },
-    uploadButtonText: {
-        color: '#FFFFFF',
-        fontSize: 12,
-        fontWeight: '900',
+    disabledButton: {
+        opacity: 0.55,
+    },
+    pressedButton: {
+        opacity: 0.8,
+    },
+    primaryButtonText: {
+        color: '#fff',
+        fontWeight: '800',
+        textAlign: 'center',
     },
     loader: {
         marginVertical: 14,
     },
     error: {
         color: colors.danger,
-        fontSize: 12,
+        fontSize: 13,
         marginVertical: 8,
     },
-    emptyState: {
-        alignItems: 'center',
-        backgroundColor: '#FAFAFF',
-        borderRadius: 15,
-        padding: 20,
-        marginTop: 8,
-    },
-    emptyEmoji: {
-        fontSize: 29,
-        marginBottom: 7,
-    },
-    emptyTitle: {
-        color: '#373B5C',
-        fontSize: 12,
-        fontWeight: '900',
-        textAlign: 'center',
-    },
-    emptyText: {
-        color: '#8589A5',
-        fontSize: 11,
-        lineHeight: 16,
-        textAlign: 'center',
-        marginTop: 5,
+    empty: {
+        color: colors.muted,
+        fontSize: 13,
+        paddingVertical: 12,
     },
     resumeItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderBottomWidth: 1,
-        borderBottomColor: '#F0F1F8',
-        paddingVertical: 12,
-        gap: 10,
-    },
-    pdfIcon: {
-        width: 42,
-        height: 48,
-        borderRadius: 12,
-        backgroundColor: '#FFE9E9',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    pdfIconText: {
-        color: '#E64E59',
-        fontSize: 10,
-        fontWeight: '900',
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+        paddingTop: 12,
+        marginTop: 8,
     },
     resumeInfo: {
-        flex: 1,
+        marginBottom: 10,
     },
     resumeName: {
-        color: '#353957',
-        fontWeight: '800',
-        fontSize: 12,
+        color: colors.text,
+        fontWeight: '700',
+        fontSize: 14,
     },
     resumeMeta: {
-        color: '#9094AC',
-        fontSize: 10,
-        marginTop: 5,
-    },
-    resumeActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-    },
-    iconAction: {
-        width: 32,
-        height: 36,
-        borderRadius: 10,
-        backgroundColor: '#F4F4FC',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    actionEmoji: {
-        fontSize: 15,
-    },
-    refreshButton: {
-        alignSelf: 'center',
-        paddingVertical: 13,
-        paddingHorizontal: 12,
+        color: colors.muted,
+        fontSize: 12,
         marginTop: 4,
     },
-    refreshText: {
-        color: '#6257D2',
-        fontWeight: '900',
+    actions: {
+        flexDirection: 'row',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    secondaryButton: {
+        borderWidth: 1,
+        borderColor: colors.primary,
+        borderRadius: 9,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+    },
+    secondaryButtonText: {
+        color: colors.primary,
+        fontWeight: '700',
         fontSize: 12,
     },
-    trustCard: {
-        flexDirection: 'row',
-        gap: 13,
-        padding: 17,
-        borderRadius: 21,
-        backgroundColor: '#E9F7F2',
+    deleteButton: {
         borderWidth: 1,
-        borderColor: '#D6EEE5',
-        marginBottom: 18,
+        borderColor: colors.danger,
+        borderRadius: 9,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
     },
-    trustIcon: {
-        width: 43,
-        height: 43,
-        borderRadius: 14,
-        backgroundColor: '#D2F0E5',
-        alignItems: 'center',
-        justifyContent: 'center',
+    deleteButtonText: {
+        color: colors.danger,
+        fontWeight: '700',
+        fontSize: 12,
     },
-    trustEmoji: {
-        fontSize: 22,
+    refreshButton: {
+        alignSelf: 'flex-start',
+        paddingVertical: 12,
     },
-    trustCopy: {
-        flex: 1,
+    refreshText: {
+        color: colors.primary,
+        fontWeight: '800',
     },
-    trustTitle: {
-        color: '#235B4D',
-        fontSize: 14,
-        fontWeight: '900',
-        marginBottom: 5,
-    },
-    trustText: {
-        color: '#4D7A6D',
-        fontSize: 11,
-        lineHeight: 16,
-        marginBottom: 8,
-    },
-    trustBullet: {
-        color: '#386B5C',
-        fontSize: 11,
-        marginTop: 4,
-    },
-    logoutButton: {
-        alignItems: 'center',
-        paddingVertical: 13,
-        borderRadius: 14,
-        backgroundColor: '#FFF0F2',
-        borderWidth: 1,
-        borderColor: '#F9DDE2',
+    infoText: {
+        color: colors.muted,
+        fontSize: 13,
+        marginVertical: 4,
     },
     logout: {
-        color: '#C34E62',
+        color: colors.danger,
         textAlign: 'center',
         fontWeight: '900',
-        fontSize: 13,
-    },
-    footer: {
-        color: '#A0A4B9',
-        fontSize: 10,
-        textAlign: 'center',
-        marginTop: 15,
-        marginBottom: 4,
-    },
-    disabledButton: {
-        opacity: 0.55,
-    },
-    pressed: {
-        opacity: 0.78,
+        padding: 15,
     },
 });
