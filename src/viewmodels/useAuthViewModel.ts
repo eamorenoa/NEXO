@@ -268,9 +268,19 @@ export function useAuthViewModel({
 
 
   const backToLogin = () => {
+    // Restablece todos los estados de navegación de autenticación.
+    // Sin esto, forgotPassword o resetPassword podían seguir activos
+    // y mantener visible la pantalla anterior aunque se pulsara el botón.
     setVerification(false);
     setRegister(false);
+    setForgotPassword(false);
+    setResetPassword(false);
+
     setVerificationCode('');
+    setNewPassword('');
+    setPassword('');
+    setConfirmPassword('');
+
     setError('');
     setMessage('');
   };

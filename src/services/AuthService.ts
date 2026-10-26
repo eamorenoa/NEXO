@@ -100,17 +100,29 @@ async function restoreSession(): Promise<Session | null> {
     const refreshToken =
         await SessionStorage.getItem(REFRESH_TOKEN_KEY);
 
-    const storedUser =
-        await SessionStorage.getItem(USER_KEY);
-
     if (!accessToken || !refreshToken) {
+        await clearSession();
         return null;
     }
 
     try {
+        // El cliente API renueva automáticamente el token
+        // si el backend responde TOKEN_EXPIRED.
         const response = await api.me(accessToken);
-
         const user = response.user;
+
+        // La renovación puede haber cambiado ambos tokens.
+        // Leemos los valores actuales del almacenamiento.
+        const currentAccessToken =
+            await SessionStorage.getItem(ACCESS_TOKEN_KEY);
+
+        const currentRefreshToken =
+            await SessionStorage.getItem(REFRESH_TOKEN_KEY);
+
+        if (!currentAccessToken || !currentRefreshToken) {
+            await clearSession();
+            return null;
+        }
 
         await SessionStorage.setItem(
             USER_KEY,
@@ -119,18 +131,75 @@ async function restoreSession(): Promise<Session | null> {
 
         return {
             user,
-            accessToken,
-            refreshToken,
+            accessToken: currentAccessToken,
+            refreshToken: currentRefreshToken,
         };
-    } catch {
-        try {
-            const refreshed = await api.refresh(refreshToken);
+    } catch (error: unknown) {
+        const code =
+            typeof error === 'object' &&
+                error !== null &&
+                'code' in error &&
+                typeof error.code === 'string'
+                ? error.code
+                : undefined;
 
-            return saveSession(refreshed);
-        } catch {
+        const definitiveSessionErrors = [
+            'INVALID_REFRESH_TOKEN',
+            'REFRESH_TOKEN_REVOKED',
+            'REFRESH_TOKEN_EXPIRED',
+            'USER_INACTIVE',
+            'USER_NOT_FOUND',
+        ];
+
+        if (
+            code &&
+            definitiveSessionErrors.includes(code)
+        ) {
             await clearSession();
             return null;
         }
+
+        // Si el access token es inválido, intentamos renovar
+        // la sesión con el refresh token que ya tenemos guardado.
+        if (code === 'INVALID_TOKEN') {
+            const storedRefreshToken =
+                await SessionStorage.getItem(REFRESH_TOKEN_KEY);
+
+            if (!storedRefreshToken) {
+                await clearSession();
+                return null;
+            }
+
+            try {
+                const refreshed = await api.refresh(storedRefreshToken);
+                return await saveSession(refreshed);
+            } catch (refreshError: unknown) {
+                const refreshCode =
+                    typeof refreshError === 'object' &&
+                        refreshError !== null &&
+                        'code' in refreshError &&
+                        typeof refreshError.code === 'string'
+                        ? refreshError.code
+                        : undefined;
+
+                if (
+                    refreshCode &&
+                    definitiveSessionErrors.includes(refreshCode)
+                ) {
+                    await clearSession();
+                    return null;
+                }
+
+                // Si falla por conexión o por un error temporal,
+                // conservamos las credenciales para reintentar.
+                throw refreshError;
+            }
+        }
+
+        // Un error de conexión o del servidor no demuestra
+        // que la sesión haya sido revocada.
+        // Conservamos las credenciales y propagamos el error.
+        throw error;
     }
 }
 
