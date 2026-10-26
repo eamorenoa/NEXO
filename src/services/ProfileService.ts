@@ -1,5 +1,7 @@
 import { API_URL } from '../config/env';
 import type { User } from '../models/User';
+import { File } from 'expo-file-system';
+import { fetch as expoFetch } from 'expo/fetch';
 
 export type EditableProfile = {
     name: string;
@@ -55,13 +57,14 @@ async function update(
     return data.profile;
 }
 
+
 async function uploadAvatar(
     token: string,
     asset: {
         uri: string;
         fileName?: string | null;
         mimeType?: string | null;
-        file?: File;
+        file?: globalThis.File;
     },
 ): Promise<Profile> {
     const mimeType = asset.mimeType || 'image/jpeg';
@@ -73,23 +76,28 @@ async function uploadAvatar(
     const form = new FormData();
 
     if (asset.file) {
+        // Navegador: adjuntar directamente el archivo seleccionado.
         form.append(
             'avatar',
             asset.file,
             asset.fileName || 'foto-perfil.jpg',
         );
     } else {
+        // Android/iOS: obtener el archivo local mediante Expo.
+        const localFile = new File(asset.uri);
+
+        if (!localFile.exists) {
+            throw new Error('No se encontró la fotografía seleccionada.');
+        }
+
         form.append(
             'avatar',
-            {
-                uri: asset.uri,
-                name: asset.fileName || 'foto-perfil.jpg',
-                type: mimeType,
-            } as unknown as Blob,
+            localFile,
+            asset.fileName || 'foto-perfil.jpg',
         );
     }
 
-    const response = await fetch(`${API_URL}/profile/avatar`, {
+    const response = await expoFetch(`${API_URL}/profile/avatar`, {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${token}`,
@@ -98,8 +106,10 @@ async function uploadAvatar(
     });
 
     const data = await parseResponse<{ profile: Profile }>(response);
+
     return data.profile;
 }
+
 
 async function removeAvatar(token: string): Promise<Profile> {
     const response = await fetch(`${API_URL}/profile/avatar`, {
