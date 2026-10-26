@@ -14,7 +14,7 @@ Admin Web ───────────────HTTP──> Express API
 ## Capas
 1. Presentación: `src/features`.
 2. Aplicación: `src/app` y view models.
-3. Infraestructura: `src/shared/api.ts`.
+3. Infraestructura: `src/services/api.ts` y `src/services/SessionStorage.ts`.
 4. Backend: Express, JWT y servicios.
 5. Persistencia: PostgreSQL.
 
