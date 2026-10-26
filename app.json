@@ -23,7 +23,8 @@
       ],
       "expo-status-bar",
       "react-native-maps",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-sharing"
     ],
     "ios": {
       "supportsTablet": true,
