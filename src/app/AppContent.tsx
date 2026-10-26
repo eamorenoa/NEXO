@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   Pressable,
@@ -52,73 +57,95 @@ export function AppContent() {
   const [restoringSession, setRestoringSession] =
     useState(true);
 
+  const [restoreError, setRestoreError] =
+    useState(false);
+
+  const mountedRef = useRef(true);
+
   /**
-   * Restaura la sesión guardada en SecureStore.
+   * Restaura la sesión guardada.
    *
-   * Si el access token todavía sirve:
-   *   /auth/me lo valida.
+   * AuthService valida la sesión y, cuando corresponde,
+   * intenta renovar los tokens.
    *
-   * Si expiró:
-   *   AuthService intenta automáticamente
-   *   utilizar el refresh token.
+   * Si ocurre un error temporal, conserva las credenciales
+   * y permite reintentar sin iniciar sesión de nuevo.
    */
-  useEffect(() => {
-    return setAccessTokenRefreshHandler((newAccessToken) => {
-      if (newAccessToken) {
-        setToken(newAccessToken);
-      } else {
-        setUser(null);
-        setToken(undefined);
+  const restoreSavedSession = useCallback(async () => {
+    setRestoringSession(true);
+    setRestoreError(false);
+
+    try {
+      const session =
+        await AuthService.restoreSession();
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      if (session) {
+        setUser(session.user);
+        setToken(session.accessToken);
         setScreen('home');
       }
-    });
+    } catch (error) {
+      console.error(
+        'Error restaurando sesión:',
+        error,
+      );
+
+      if (mountedRef.current) {
+        setRestoreError(true);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setRestoringSession(false);
+      }
+    }
   }, []);
 
+  /**
+   * Registra el comportamiento cuando se renueva
+   * o se invalida el token de acceso.
+   */
   useEffect(() => {
-    let mounted = true;
-
-    const restore = async () => {
-      try {
-        const session =
-          await AuthService.restoreSession();
-
-        if (!mounted) {
-          return;
-        }
-
-        if (session) {
-          setUser(session.user);
-          setToken(session.accessToken);
+    return setAccessTokenRefreshHandler(
+      (newAccessToken) => {
+        if (newAccessToken) {
+          setToken(newAccessToken);
+        } else {
+          setUser(null);
+          setToken(undefined);
           setScreen('home');
         }
-      } catch (error) {
-        console.error(
-          'Error restaurando sesión:',
-          error,
-        );
-      } finally {
-        if (mounted) {
-          setRestoringSession(false);
-        }
-      }
-    };
-
-    restore();
-
-    return () => {
-      mounted = false;
-    };
+      },
+    );
   }, []);
 
+  /**
+   * Restaura la sesión al iniciar la aplicación.
+   */
+  useEffect(() => {
+    mountedRef.current = true;
+
+    void restoreSavedSession();
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [restoreSavedSession]);
+
+  /**
+   * Finaliza la pantalla de bienvenida.
+   */
   const finish = useCallback(() => {
     setSplash(false);
   }, []);
 
   /**
-   * Se ejecuta después de un login correcto.
+   * Se ejecuta después de un inicio de sesión correcto.
    *
-   * AuthService ya guardó accessToken y refreshToken
-   * en SecureStore.
+   * AuthService ya guardó los tokens en el almacenamiento.
    */
   const login = useCallback(
     (session: {
@@ -129,13 +156,13 @@ export function AppContent() {
       setUser(session.user);
       setToken(session.accessToken);
       setScreen('home');
+      setRestoreError(false);
     },
     [],
   );
 
   /**
-   * Cierra sesión tanto en el servidor como
-   * en el almacenamiento seguro del dispositivo.
+   * Cierra la sesión y limpia el estado de la aplicación.
    */
   const logout = useCallback(async () => {
     await AuthService.logout();
@@ -143,6 +170,7 @@ export function AppContent() {
     setUser(null);
     setToken(undefined);
     setScreen('home');
+    setRestoreError(false);
   }, []);
 
   // SPLASH
@@ -172,6 +200,50 @@ export function AppContent() {
     );
   }
 
+  // ERROR AL RESTAURAR LA SESIÓN
+
+  if (restoreError && (!user || !token)) {
+    return (
+      <View style={styles.loadingScreen}>
+        <Text style={styles.errorTitle}>
+          No fue posible restaurar la sesión
+        </Text>
+
+        <Text style={styles.errorMessage}>
+          Compruebe su conexión a Internet
+          e inténtelo nuevamente.
+        </Text>
+
+        <Pressable
+          style={styles.retryButton}
+          onPress={() => {
+            void restoreSavedSession();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Reintentar restauración de sesión"
+        >
+          <Text style={styles.retryButtonText}>
+            Reintentar
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.loginLinkButton}
+          onPress={() => {
+            setRestoreError(false);
+            setUser(null);
+            setToken(undefined);
+          }}
+          accessibilityRole="button"
+        >
+          <Text style={styles.retryLink}>
+            Iniciar sesión
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   // LOGIN
 
   if (!user || !token) {
@@ -187,9 +259,9 @@ export function AppContent() {
   if (screen === 'emergency') {
     return (
       <EmergencyView
-        onClose={() =>
-          setScreen('home')
-        }
+        onClose={() => {
+          setScreen('home');
+        }}
       />
     );
   }
@@ -202,9 +274,9 @@ export function AppContent() {
         <SafeAreaView style={s.root}>
           <AIView
             token={token}
-            onBack={() =>
-              setScreen('home')
-            }
+            onBack={() => {
+              setScreen('home');
+            }}
           />
         </SafeAreaView>
       </SafeAreaProvider>
@@ -213,30 +285,27 @@ export function AppContent() {
 
   // PANTALLAS
 
-  const content: Record<
-    string,
-    React.ReactNode
-  > = {
+  const content: Record<string, React.ReactNode> = {
     home: (
       <HomeView
         user={user}
         token={token}
         go={setScreen}
-        onEmergency={() =>
-          setScreen('emergency')
-        }
-        onAI={() =>
-          setScreen('ai')
-        }
+        onEmergency={() => {
+          setScreen('emergency');
+        }}
+        onAI={() => {
+          setScreen('ai');
+        }}
       />
     ),
 
     needs: (
       <NeedsView
         token={token}
-        onBack={() =>
-          setScreen('home')
-        }
+        onBack={() => {
+          setScreen('home');
+        }}
       />
     ),
 
@@ -262,65 +331,62 @@ export function AppContent() {
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.root}>
-
         <View style={s.body}>
-          {content[screen] ||
-            content.home}
+          {content[screen] || content.home}
         </View>
 
         {/* BARRA DE NAVEGACIÓN */}
 
         <View style={s.nav}>
-          {tabs.map(
-            ([key, icon, label]) => (
-              <Pressable
-                key={key}
-                onPress={() =>
-                  setScreen(key)
-                }
-                style={s.tab}
+          {tabs.map(([key, icon, label]) => (
+            <Pressable
+              key={key}
+              onPress={() => {
+                setScreen(key);
+              }}
+              style={s.tab}
+            >
+              <Text
+                style={[
+                  s.icon,
+                  screen === key && s.active,
+                ]}
               >
-                <Text
-                  style={[
-                    s.icon,
-                    screen === key &&
-                    s.active,
-                  ]}
-                >
-                  {icon}
-                </Text>
+                {icon}
+              </Text>
 
-                <Text
-                  style={[
-                    s.label,
-                    screen === key &&
-                    s.active,
-                  ]}
-                >
-                  {label}
-                </Text>
-              </Pressable>
-            ),
-          )}
+              <Text
+                style={[
+                  s.label,
+                  screen === key && s.active,
+                ]}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          ))}
         </View>
 
         {/* BOTÓN + */}
 
         <Pressable
-          onPress={() =>
-            setScreen('needs')
-          }
+          onPress={() => {
+            setScreen('needs');
+          }}
           style={s.fab}
+          accessibilityRole="button"
+          accessibilityLabel="Crear una publicación"
         >
           <Text style={s.plus}>
             +
           </Text>
         </Pressable>
-
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
+
+// ESTILOS DE CARGA Y AUTENTICACIÓN
 
 const styles = StyleSheet.create({
   loadingScreen: {
@@ -336,14 +402,59 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  errorTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  errorMessage: {
+    marginTop: 12,
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+  },
+
+  retryButton: {
+    marginTop: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  loginLinkButton: {
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+
+  retryLink: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
+
+// ESTILOS PRINCIPALES DE LA APLICACIÓN
 
 const s = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor:
-      colors.background,
+    backgroundColor: colors.background,
   },
 
   body: {
@@ -362,8 +473,7 @@ const s = StyleSheet.create({
     borderColor: colors.border,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent:
-      'space-around',
+    justifyContent: 'space-around',
     elevation: 8,
   },
 

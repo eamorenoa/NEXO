@@ -104,6 +104,7 @@ async function refreshAccessToken(): Promise<string | null> {
         'REFRESH_TOKEN_REVOKED',
         'REFRESH_TOKEN_EXPIRED',
         'USER_INACTIVE',
+        'USER_NOT_FOUND',
       ];
 
       if (definitiveSessionErrors.includes(result.code)) {
@@ -115,9 +116,17 @@ async function refreshAccessToken(): Promise<string | null> {
         accessTokenRefreshHandler?.(null);
       }
 
-      throw new Error(
+      const error = new Error(
         result.message || 'No fue posible renovar la sesión.',
-      );
+      ) as ApiError;
+
+      error.status = response.status;
+      error.code =
+        typeof result.code === 'string'
+          ? result.code
+          : undefined;
+
+      throw error;
     }
 
     if (
@@ -145,17 +154,21 @@ async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
   hasRetried = false,
 ): Promise<T> {
+  const headers = new Headers(options.headers);
+
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
   });
 
   const body = await response.json().catch(() => ({}));
@@ -179,12 +192,12 @@ async function request<T>(
       const newAccessToken = await refreshAccessToken();
 
       if (newAccessToken) {
-        const headers = new Headers(options.headers);
-        headers.set('Authorization', `Bearer ${newAccessToken}`);
+        const retryHeaders = new Headers(options.headers);
+        retryHeaders.set('Authorization', `Bearer ${newAccessToken}`);
 
         return request<T>(
           path,
-          { ...options, headers },
+          { ...options, headers: retryHeaders },
           true,
         );
       }
