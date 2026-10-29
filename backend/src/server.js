@@ -16,6 +16,7 @@ import {
     sendVerificationEmail,
     sendPasswordResetEmail,
 } from './services/email.js';
+import { completePasswordReset, validatePassword } from './services/passwordReset.js';
 
 const { Pool } = pg;
 
@@ -608,188 +609,22 @@ app.post(
     recoveryRateLimit,
     async (req, res, next) => {
         try {
-            const email = String(
-                req.body.email || ''
-            )
-                .trim()
-                .toLowerCase();
-
-            const code = String(
-                req.body.code || ''
-            ).trim();
-
-            const newPassword = String(
-                req.body.newPassword || ''
-            );
-
-            if (
-                !email ||
-                !/^\d{6}$/.test(code) ||
-                !newPassword
-            ) {
-                return res.status(400).json({
-                    message:
-                        'Correo, código y nueva contraseña son obligatorios.',
-                    code: 'INVALID_RESET_DATA',
-                });
-            }
-
-            if (newPassword.length < 8) {
-                return res.status(400).json({
-                    message:
-                        'La nueva contraseña debe tener al menos 8 caracteres.',
-                    code: 'INVALID_PASSWORD',
-                });
-            }
-
-            const { rows: userRows } =
-                await pool.query(
-                    `
-                SELECT id
-                FROM users
-                WHERE LOWER(email) = LOWER($1)
-                LIMIT 1
-                `,
-                    [email]
-                );
-
-            const user = userRows[0];
-
-            if (!user) {
-                return res.status(400).json({
-                    message:
-                        'Código de recuperación no válido.',
-                    code: 'INVALID_RESET_CODE',
-                });
-            }
-
-            const { rows: codeRows } =
-                await pool.query(
-                    `
-                SELECT
-                    id,
-                    code_hash,
-                    attempts,
-                    expires_at
-                FROM password_reset_codes
-                WHERE user_id = $1
-                  AND used_at IS NULL
-                ORDER BY created_at DESC
-                LIMIT 1
-                `,
-                    [user.id]
-                );
-
-            const resetCode = codeRows[0];
-
-            if (!resetCode) {
-                return res.status(400).json({
-                    message:
-                        'No existe un código de recuperación activo.',
-                    code: 'NO_ACTIVE_RESET_CODE',
-                });
-            }
-
-            if (
-                new Date(
-                    resetCode.expires_at
-                ).getTime() <= Date.now()
-            ) {
-                await pool.query(
-                    `
-                UPDATE password_reset_codes
-                SET used_at = NOW()
-                WHERE id = $1
-                `,
-                    [resetCode.id]
-                );
-
-                return res.status(400).json({
-                    message:
-                        'El código de recuperación ha expirado.',
-                    code: 'RESET_CODE_EXPIRED',
-                });
-            }
-
-            if (
-                resetCode.attempts >=
-                PASSWORD_RESET_MAX_ATTEMPTS
-            ) {
-                await pool.query(
-                    `
-                UPDATE password_reset_codes
-                SET used_at = NOW()
-                WHERE id = $1
-                `,
-                    [resetCode.id]
-                );
-
-                return res.status(429).json({
-                    message:
-                        'Se superó el número máximo de intentos. Solicite un nuevo código.',
-                    code: 'TOO_MANY_RESET_ATTEMPTS',
-                });
-            }
-
-            const submittedHash =
-                hashVerificationCode(code);
-
-            if (
-                submittedHash !==
-                resetCode.code_hash
-            ) {
-                await pool.query(
-                    `
-                UPDATE password_reset_codes
-                SET attempts = attempts + 1
-                WHERE id = $1
-                `,
-                    [resetCode.id]
-                );
-
-                return res.status(400).json({
-                    message:
-                        'Código de recuperación incorrecto.',
-                    code: 'INVALID_RESET_CODE',
-                });
-            }
-
-            const passwordHash =
-                await bcrypt.hash(
-                    newPassword,
-                    12
-                );
-
-            await pool.query(
-                `
-            UPDATE users
-            SET password_hash = $1
-            WHERE id = $2
-            `,
-                [
-                    passwordHash,
-                    user.id,
-                ]
-            );
-
-            await pool.query(
-                `
-            UPDATE password_reset_codes
-            SET used_at = NOW()
-            WHERE id = $1
-            `,
-                [resetCode.id]
-            );
-
-            return res.json({
-                ok: true,
-                message:
-                    'Contraseña actualizada correctamente.',
+            const result = await completePasswordReset({
+                pool,
+                email: req.body?.email,
+                code: req.body?.code,
+                newPassword: req.body?.newPassword,
+                hashPassword: (password) => bcrypt.hash(password, 12),
+                hashVerificationCode,
+                maxAttempts: PASSWORD_RESET_MAX_ATTEMPTS,
             });
+
+            return res.status(result.status).json(result.body);
         } catch (error) {
-            next(error);
+            return next(error);
         }
     });
+
 /*
 |--------------------------------------------------------------------------
 | AUTH - REGISTER
@@ -834,12 +669,9 @@ app.post(
                 });
             }
 
-            if (password.length < 8 || password.length > 128) {
-                return res.status(400).json({
-                    message:
-                        'La contraseña debe tener al menos 8 caracteres y no más de 128',
-                    code: 'INVALID_PASSWORD',
-                });
+            const passwordError = validatePassword(password);
+            if (passwordError) {
+                return res.status(400).json(passwordError);
             }
 
             const hash = await bcrypt.hash(
