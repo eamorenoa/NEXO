@@ -12,6 +12,62 @@ export interface Session {
     refreshToken: string;
 }
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 128;
+
+function normalizeEmail(email: string): string {
+    if (typeof email !== 'string') {
+        throw new Error('El correo electrónico es obligatorio.');
+    }
+
+    const normalized = email.trim().toLowerCase();
+    if (
+        normalized.length > 150 ||
+        !EMAIL_PATTERN.test(normalized)
+    ) {
+        throw new Error('Usa un correo electrónico válido.');
+    }
+
+    return normalized;
+}
+
+function validatePassword(password: string, field = 'La contraseña'): void {
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+        throw new Error(
+            `${field} debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`,
+        );
+    }
+
+    if (password.length > MAX_PASSWORD_LENGTH) {
+        throw new Error(
+            `${field} no puede superar ${MAX_PASSWORD_LENGTH} caracteres.`,
+        );
+    }
+
+    const utf8Bytes = new TextEncoder().encode(password).length;
+    if (utf8Bytes > 72) {
+        throw new Error(
+            `${field} no puede superar los 72 bytes UTF-8 por compatibilidad con bcrypt.`,
+        );
+    }
+}
+
+
+function validateVerificationCode(code: string): string {
+    if (typeof code !== 'string') {
+        throw new Error('Escriba el código de 6 dígitos.');
+    }
+
+    const normalized = code.trim();
+    if (!VERIFICATION_CODE_PATTERN.test(normalized)) {
+        throw new Error('Escriba el código de 6 dígitos.');
+    }
+
+    return normalized;
+}
+
 async function saveSession(response: AuthResponse): Promise<Session> {
     if (
         typeof response?.accessToken !== 'string' ||
@@ -33,9 +89,19 @@ async function saveSession(response: AuthResponse): Promise<Session> {
         throw new Error('No se recibió un usuario válido al restaurar la sesión.');
     }
 
-    await SessionStorage.setItem(ACCESS_TOKEN_KEY, response.accessToken);
-    await SessionStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
-    await SessionStorage.setItem(USER_KEY, JSON.stringify(user));
+    // Evita dejar una sesión parcialmente guardada si falla una escritura.
+    try {
+        await SessionStorage.setItem(ACCESS_TOKEN_KEY, response.accessToken);
+        await SessionStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
+        await SessionStorage.setItem(USER_KEY, JSON.stringify(user));
+    } catch (error: unknown) {
+        try {
+            await clearSession();
+        } catch {
+            // Se conserva el error original de almacenamiento.
+        }
+        throw error;
+    }
 
     return {
         user,
@@ -44,17 +110,32 @@ async function saveSession(response: AuthResponse): Promise<Session> {
     };
 }
 
-async function clearSession() {
-    await SessionStorage.deleteItem(ACCESS_TOKEN_KEY);
-    await SessionStorage.deleteItem(REFRESH_TOKEN_KEY);
-    await SessionStorage.deleteItem(USER_KEY);
+async function clearSession(): Promise<void> {
+    // Intenta eliminar todas las claves aunque falle una operación.
+    const results = await Promise.allSettled([
+        SessionStorage.deleteItem(ACCESS_TOKEN_KEY),
+        SessionStorage.deleteItem(REFRESH_TOKEN_KEY),
+        SessionStorage.deleteItem(USER_KEY),
+    ]);
+
+    const failed = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed) {
+        throw failed.reason;
+    }
 }
 
 async function login(
     email: string,
     password: string,
 ): Promise<Session> {
-    const response = await api.login(email, password);
+    const normalizedEmail = normalizeEmail(email);
+    if (typeof password !== 'string' || password.length === 0) {
+        throw new Error('La contraseña es obligatoria.');
+    }
+
+    const response = await api.login(normalizedEmail, password);
     return saveSession(response);
 }
 
@@ -63,18 +144,28 @@ async function register(
     email: string,
     password: string,
 ) {
-    return api.register(name, email, password);
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    if (normalizedName.length < 3 || normalizedName.length > 120) {
+        throw new Error('El nombre debe tener entre 3 y 120 caracteres.');
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    validatePassword(password);
+    return api.register(normalizedName, normalizedEmail, password);
 }
 
 async function verifyEmail(
     email: string,
     code: string,
 ) {
-    return api.verifyEmail(email, code);
+    return api.verifyEmail(
+        normalizeEmail(email),
+        validateVerificationCode(code),
+    );
 }
 
 async function forgotPassword(email: string) {
-    return api.forgotPassword(email);
+    return api.forgotPassword(normalizeEmail(email));
 }
 
 async function resetPassword(
@@ -82,15 +173,19 @@ async function resetPassword(
     code: string,
     newPassword: string,
 ) {
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedCode = validateVerificationCode(code);
+    validatePassword(newPassword, 'La nueva contraseña');
+
     return api.resetPassword(
-        email,
-        code,
+        normalizedEmail,
+        normalizedCode,
         newPassword,
     );
 }
 
 async function resendVerification(email: string) {
-    return api.resendVerification(email);
+    return api.resendVerification(normalizeEmail(email));
 }
 
 async function restoreSession(): Promise<Session | null> {
@@ -219,16 +314,35 @@ async function logout() {
 }
 
 async function getStoredUser(): Promise<User | null> {
-    const storedUser =
-        await SessionStorage.getItem(USER_KEY);
-
+    const storedUser = await SessionStorage.getItem(USER_KEY);
     if (!storedUser) {
         return null;
     }
 
     try {
-        return JSON.parse(storedUser) as User;
+        const parsed: unknown = JSON.parse(storedUser);
+        if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            !('id' in parsed) ||
+            (typeof parsed.id !== 'string' && typeof parsed.id !== 'number') ||
+            !String(parsed.id).trim() ||
+            !('name' in parsed) || typeof parsed.name !== 'string' ||
+            !('email' in parsed) || typeof parsed.email !== 'string'
+        ) {
+            await SessionStorage.deleteItem(USER_KEY);
+            return null;
+        }
+
+        return {
+            id: String(parsed.id),
+            name: parsed.name,
+            email: parsed.email,
+            ...('role' in parsed ? { role: parsed.role as User['role'] } : {}),
+        };
     } catch {
+        // Elimina datos corruptos para no reutilizarlos en una sesión posterior.
+        await SessionStorage.deleteItem(USER_KEY);
         return null;
     }
 }

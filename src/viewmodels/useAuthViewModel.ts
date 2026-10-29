@@ -43,20 +43,22 @@ export function useAuthViewModel({
       return;
     }
 
-    if (password.length < 6) {
+    if (!password || (register && (password.length < 8 || password.length > 128))) {
       setError(
-        'La contraseña debe tener mínimo 6 caracteres.',
+        register
+          ? 'La contraseña debe tener entre 8 y 128 caracteres.'
+          : 'Escribe tu contraseña.',
       );
       return;
     }
 
     if (
       register &&
-      (name.trim().length < 3 ||
+      (name.trim().length < 3 || name.trim().length > 120 ||
         password !== confirmPassword)
     ) {
       setError(
-        'Completa el nombre y verifica las contraseñas.',
+        'El nombre debe tener entre 3 y 120 caracteres y las contraseñas deben coincidir.',
       );
       return;
     }
@@ -230,9 +232,9 @@ export function useAuthViewModel({
       return;
     }
 
-    if (newPassword.length < 8) {
+    if (newPassword.length < 8 || newPassword.length > 128) {
       setError(
-        'La nueva contraseña debe tener al menos 8 caracteres.',
+        'La nueva contraseña debe tener entre 8 y 128 caracteres.',
       );
       return;
     }
