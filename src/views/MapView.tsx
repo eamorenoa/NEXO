@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -13,11 +13,9 @@ import * as Location from 'expo-location';
 
 import { useMapViewModel } from '../viewmodels/useMapViewModel';
 import { colors } from '../shared/theme';
+import { hasValidCoordinates, MapPlace } from '../models/MapPlace';
 
-const DEFAULT_LOCATION = {
-  latitude: 4.711,
-  longitude: -74.0721,
-};
+type MapPlaceWithDistance = MapPlace & { distance: number | null };
 
 const DISTANCES = [0.5, 1, 2, 5, 10];
 
@@ -51,7 +49,11 @@ function calculateDistance(
   return earthRadius * c;
 }
 
-function formatDistance(distance: number) {
+function formatDistance(distance: number | null) {
+  if (distance === null || !Number.isFinite(distance)) {
+    return 'No disponible';
+  }
+
   if (distance < 1) {
     return `${Math.round(distance * 1000)} m`;
   }
@@ -81,7 +83,7 @@ function WebMap({
   center,
   hasLocation,
 }: {
-  places: any[];
+  places: MapPlaceWithDistance[];
   center: {
     latitude: number;
     longitude: number;
@@ -93,7 +95,7 @@ function WebMap({
       places.map((place) => ({
         lat: Number(place.latitude),
         lng: Number(place.longitude),
-        title: String(place.title ?? 'Publicación comunitaria'),
+        title: String(place.title ?? 'Punto comunitario'),
         category: String(place.category ?? ''),
         source: String(place.source ?? 'place'),
         description: String(place.description ?? ''),
@@ -157,7 +159,8 @@ function WebMap({
               ${center.longitude}
             ];
 
-            const map = L.map('map').setView(center, 14);
+            const initialZoom = ${hasLocation ? 14 : places.length > 0 ? 12 : 2};
+            const map = L.map('map').setView(center, initialZoom);
 
             L.tileLayer(
               'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -210,9 +213,8 @@ function WebMap({
               }
 
                 const markerColors = {
-                place: '#2563eb',
-                need: '#dc2626',
-                community: '#16a34a',
+                place: '#6D45D9',
+                need: '#E05A47',
               };
 
               const marker = L.circleMarker([place.lat, place.lng], {
@@ -269,37 +271,20 @@ export function MapView() {
     useState<Location.LocationObject | null>(null);
 
   const [locationError, setLocationError] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [maxDistance, setMaxDistance] = useState(2);
-  const [selectedPlace, setSelectedPlace] = useState<any | null>(null);
-
-  useEffect(() => {
-    void getCurrentLocation();
-  }, []);
+  const [selectedPlace, setSelectedPlace] = useState<MapPlaceWithDistance | null>(null);
 
   async function getCurrentLocation() {
     setLocationError(false);
+    setLocationLoading(true);
 
     try {
       // 1. Comprobar que el GPS o los servicios de ubicación estén activos.
       const servicesEnabled = await Location.hasServicesEnabledAsync();
 
       if (!servicesEnabled) {
-        console.warn(
-          'Los servicios de ubicación del dispositivo están desactivados.'
-        );
-
-        // Intentar recuperar una ubicación guardada recientemente.
-        const lastLocation = await Location.getLastKnownPositionAsync({
-          maxAge: 120000,
-          requiredAccuracy: 200,
-        });
-
-        if (lastLocation) {
-          setLocation(lastLocation);
-          return;
-        }
-
         setLocationError(true);
         return;
       }
@@ -309,7 +294,6 @@ export function MapView() {
         await Location.requestForegroundPermissionsAsync();
 
       if (permission.status !== 'granted') {
-        console.warn('El usuario no concedió permiso de ubicación.');
         setLocationError(true);
         return;
       }
@@ -322,6 +306,7 @@ export function MapView() {
 
       // 4. Guardar las coordenadas obtenidas.
       setLocation(currentLocation);
+      setSelectedPlace(null);
     } catch (error) {
       console.warn('No se pudo obtener la ubicación actual:', error);
 
@@ -334,6 +319,7 @@ export function MapView() {
 
         if (lastLocation) {
           setLocation(lastLocation);
+          setSelectedPlace(null);
           return;
         }
       } catch (fallbackError) {
@@ -344,48 +330,62 @@ export function MapView() {
       }
 
       setLocationError(true);
+    } finally {
+      setLocationLoading(false);
     }
   }
-  const center = location
-    ? {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    }
-    : DEFAULT_LOCATION;
-  const placesWithDistance = useMemo(() => {
-    return vm.places.map((place: any) => {
-      const distance = location
-        ? calculateDistance(
-          location.coords.latitude,
-          location.coords.longitude,
-          Number(place.latitude),
-          Number(place.longitude)
-        )
-        : null;
 
-      return {
+  const firstValidPlace = vm.places.find((place) =>
+    hasValidCoordinates(place.latitude, place.longitude)
+  );
+  const center = location
+    ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+    : firstValidPlace
+      ? { latitude: firstValidPlace.latitude, longitude: firstValidPlace.longitude }
+      : { latitude: 0, longitude: 0 };
+
+  const placesWithDistance = useMemo<MapPlaceWithDistance[]>(() => {
+    return vm.places
+      .filter((place) => hasValidCoordinates(place.latitude, place.longitude))
+      .map((place) => ({
         ...place,
-        distance,
-      };
-    });
+        distance: location
+          ? calculateDistance(
+            location.coords.latitude,
+            location.coords.longitude,
+            place.latitude,
+            place.longitude,
+          )
+          : null,
+      }));
   }, [vm.places, location]);
+
 
   const filteredPlaces = useMemo(() => {
     return placesWithDistance
-      .filter((place: any) => {
+      .filter((place) => {
         const categoryMatches =
           selectedCategory === 'all' ||
           place.category === selectedCategory;
 
+        // Si no hay ubicación, no se aplica el filtro de distancia.
         const distanceMatches =
-          location !== null &&
-          place.distance !== null &&
-          place.distance <= maxDistance;
+          location === null ||
+          (place.distance !== null &&
+            place.distance <= maxDistance);
 
         return categoryMatches && distanceMatches;
       })
-      .sort((a: any, b: any) => a.distance - b.distance);
-  }, [placesWithDistance, selectedCategory, maxDistance]);
+      .sort((a, b) => {
+        // Sin ubicación, conservamos el orden recibido.
+        if (a.distance === null || b.distance === null) {
+          return 0;
+        }
+
+        return a.distance - b.distance;
+      });
+  }, [placesWithDistance, selectedCategory, maxDistance, location]);
+
 
   return (
     <View style={styles.container}>
@@ -393,11 +393,13 @@ export function MapView() {
         style={styles.scroll}
         contentContainerStyle={styles.content}
       >
-        <Text style={styles.title}>Mapa comunitario</Text>
-
-        <Text style={styles.subtitle}>
-          Encuentre ayuda, servicios y oportunidades cerca de usted.
-        </Text>
+        <View style={styles.hero}>
+          <Text style={styles.eyebrow}>NEXO · COMUNIDAD</Text>
+          <Text style={styles.title}>Mapa comunitario</Text>
+          <Text style={styles.subtitle}>
+            Encuentra necesidades y lugares registrados por la comunidad.
+          </Text>
+        </View>
 
         {/* CATEGORÍAS */}
         <Text style={styles.sectionTitle}>Categoría</Text>
@@ -494,40 +496,48 @@ export function MapView() {
           <View style={styles.locationInfo}>
             <Text style={styles.locationTitle}>
               {location
-                ? 'Ubicación encontrada'
+                ? 'Ubicación activada'
                 : locationError
                   ? 'Ubicación no disponible'
-                  : 'Buscando su ubicación...'}
+                  : 'Explora sin activar tu ubicación'}
             </Text>
 
             <Text style={styles.locationText}>
               {location
-                ? `${location.coords.latitude.toFixed(5)}, ${location.coords.longitude.toFixed(5)}`
+                ? 'Las distancias se calculan desde tu ubicación.'
                 : locationError
-                  ? 'Revise el permiso de ubicación.'
-                  : 'Espere un momento...'}
+                  ? 'Comprueba los permisos o sigue explorando sin ubicación.'
+                  : 'Actívala solo si quieres consultar distancias.'}
             </Text>
           </View>
 
           <Pressable
             onPress={() => void getCurrentLocation()}
+            disabled={locationLoading}
+            accessibilityRole="button"
+            accessibilityLabel={location ? 'Actualizar ubicación' : 'Activar ubicación'}
             style={styles.refreshButton}
           >
-            <Text style={styles.refreshText}>Actualizar</Text>
+            <Text style={styles.refreshText}>
+              {locationLoading ? 'Buscando…' : location ? 'Actualizar' : 'Activar'}
+            </Text>
           </Pressable>
         </View>
 
         {/* RESULTADOS */}
         <View style={styles.resultsHeader}>
           <View>
-            <Text style={styles.resultsTitle}>Lugares cercanos</Text>
+
+            <Text style={styles.resultsTitle}>
+              {location ? 'Lugares cercanos' : 'Lugares disponibles'}
+            </Text>
 
             <Text style={styles.resultsSubtitle}>
-              Hasta{' '}
-              {maxDistance < 1
-                ? `${maxDistance * 1000} metros`
-                : `${maxDistance} km`}
+              {location
+                ? 'Dentro de ' + (maxDistance < 1 ? `${maxDistance * 1000} m` : `${maxDistance} km`)
+                : 'Activa la ubicación para filtrar por distancia'}
             </Text>
+            <Text style={styles.resultsCount}>{filteredPlaces.length} resultados</Text>
           </View>
 
           {vm.loading && (
@@ -563,13 +573,13 @@ export function MapView() {
             </Text>
           </View>
         ) : (
-          filteredPlaces.map((place: any) => (
+          filteredPlaces.map((place) => (
             <Pressable
-              key={String(place.id)}
+              key={`${place.source}:${place.id}`}
               onPress={() => setSelectedPlace(place)}
               style={[
                 styles.placeCard,
-                selectedPlace?.id === place.id &&
+                selectedPlace?.id === place.id && selectedPlace?.source === place.source &&
                 styles.placeCardSelected,
               ]}
             >
@@ -577,15 +587,13 @@ export function MapView() {
                 <Text style={styles.placeIconText}>
                   {place.source === 'need'
                     ? '🆘'
-                    : place.source === 'community'
-                      ? '🤝'
-                      : place.category === 'service'
-                        ? '🏥'
-                        : place.category === 'job'
-                          ? '💼'
-                          : place.category === 'donation'
-                            ? '🎁'
-                            : '📍'}
+                    : place.category === 'service'
+                      ? '🏥'
+                      : place.category === 'job'
+                        ? '💼'
+                        : place.category === 'donation'
+                          ? '🎁'
+                          : '📍'}
                 </Text>
               </View>
 
@@ -593,11 +601,7 @@ export function MapView() {
                 <Text style={styles.placeName}>{place.title}</Text>
 
                 <Text style={styles.placeCategory}>
-                  {place.source === 'need'
-                    ? 'Necesidad'
-                    : place.source === 'community'
-                      ? 'Comunidad'
-                      : getCategoryLabel(place.category)}
+                  {place.source === 'need' ? 'Necesidad' : getCategoryLabel(place.category)}
                 </Text>
 
                 {place.description && (
@@ -629,11 +633,7 @@ export function MapView() {
                 </Text>
 
                 <Text style={styles.detailCategory}>
-                  {selectedPlace.source === 'need'
-                    ? 'Necesidad'
-                    : selectedPlace.source === 'community'
-                      ? 'Comunidad'
-                      : getCategoryLabel(selectedPlace.category)}
+                  {selectedPlace.source === 'need' ? 'Necesidad' : getCategoryLabel(selectedPlace.category)}
                 </Text>
               </View>
 
@@ -661,17 +661,6 @@ export function MapView() {
               </Text>
             </View>
 
-            <View style={styles.coordinates}>
-              <Text style={styles.coordinatesLabel}>
-                Coordenadas
-              </Text>
-
-              <Text style={styles.coordinatesText}>
-                {Number(selectedPlace.latitude).toFixed(5)}
-                {', '}
-                {Number(selectedPlace.longitude).toFixed(5)}
-              </Text>
-            </View>
           </View>
         )}
 
@@ -690,26 +679,44 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: 18,
-    paddingBottom: 100,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 112,
+  },
+  hero: {
+    backgroundColor: '#F2EDFF',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E4D9FF',
+    paddingHorizontal: 20,
+    paddingVertical: 22,
+    marginBottom: 8,
+  },
+  eyebrow: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    marginBottom: 9,
   },
   title: {
     color: colors.text,
-    fontSize: 27,
+    fontSize: 30,
     fontWeight: '900',
+    letterSpacing: -0.6,
   },
   subtitle: {
     color: colors.muted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 5,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 7,
   },
   sectionTitle: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
-    marginTop: 18,
-    marginBottom: 9,
+    marginTop: 20,
+    marginBottom: 11,
   },
   horizontalScroll: {
     marginBottom: 2,
@@ -718,10 +725,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 20,
-    marginRight: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 22,
+    marginRight: 9,
   },
   categoryButtonActive: {
     backgroundColor: colors.primary,
@@ -729,7 +736,7 @@ const styles = StyleSheet.create({
   },
   categoryText: {
     color: colors.muted,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
   },
   categoryTextActive: {
@@ -739,10 +746,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
-    paddingHorizontal: 15,
-    paddingVertical: 9,
-    borderRadius: 20,
-    marginRight: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 22,
+    marginRight: 9,
   },
   distanceButtonActive: {
     backgroundColor: colors.primary,
@@ -750,20 +757,25 @@ const styles = StyleSheet.create({
   },
   distanceText: {
     color: colors.muted,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
   },
   distanceTextActive: {
     color: '#FFFFFF',
   },
   mapContainer: {
-    height: 390,
-    marginTop: 16,
-    borderRadius: 22,
+    height: 380,
+    marginTop: 20,
+    borderRadius: 24,
     overflow: 'hidden',
     backgroundColor: '#EEF2E8',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#DDD4F7',
+    shadowColor: '#35205F',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
   },
   map: {
     flex: 1,
@@ -772,16 +784,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 17,
-    padding: 13,
-    marginTop: 12,
+    borderRadius: 20,
+    padding: 15,
+    marginTop: 14,
     flexDirection: 'row',
     alignItems: 'center',
   },
   locationIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
@@ -795,19 +807,30 @@ const styles = StyleSheet.create({
   },
   locationTitle: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
   },
   locationText: {
     color: colors.muted,
-    fontSize: 10,
-    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
   },
   refreshButton: {
     backgroundColor: colors.primarySoft,
-    borderRadius: 10,
-    paddingHorizontal: 9,
-    paddingVertical: 8,
+    borderRadius: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  resultsCount: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6D28D9',
+    backgroundColor: '#F3E8FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   refreshText: {
     color: colors.primary,
@@ -815,29 +838,31 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   resultsHeader: {
-    marginTop: 18,
-    marginBottom: 9,
+    marginTop: 22,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   resultsTitle: {
     color: colors.text,
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '900',
+    letterSpacing: -0.3,
   },
   resultsSubtitle: {
     color: colors.muted,
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
   },
   placeCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 17,
-    padding: 12,
-    marginBottom: 9,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -846,9 +871,9 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   placeIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 50,
+    height: 50,
+    borderRadius: 16,
     backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
@@ -863,39 +888,40 @@ const styles = StyleSheet.create({
   },
   placeName: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: '800',
   },
   placeCategory: {
     color: colors.primary,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '800',
     marginTop: 3,
   },
   placeDescription: {
     color: colors.muted,
-    fontSize: 10,
-    lineHeight: 15,
-    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 6,
   },
   distanceBadge: {
     backgroundColor: '#F3F4F6',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   distanceBadgeText: {
     color: colors.text,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '800',
   },
   detailCard: {
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.primary,
-    borderRadius: 18,
-    padding: 15,
-    marginTop: 5,
+    borderRadius: 20,
+    padding: 18,
+    marginTop: 8,
   },
   detailHeader: {
     flexDirection: 'row',
@@ -907,14 +933,14 @@ const styles = StyleSheet.create({
   },
   detailTitle: {
     color: colors.text,
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: '900',
   },
   detailCategory: {
     color: colors.primary,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '800',
-    marginTop: 4,
+    marginTop: 5,
   },
   closeButton: {
     width: 32,
@@ -931,19 +957,19 @@ const styles = StyleSheet.create({
   },
   detailDescription: {
     color: colors.muted,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 12,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 14,
   },
   detailDistance: {
     backgroundColor: colors.primarySoft,
     borderRadius: 12,
-    padding: 11,
-    marginTop: 12,
+    padding: 14,
+    marginTop: 14,
   },
   detailDistanceLabel: {
     color: colors.muted,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '700',
   },
   detailDistanceValue: {
@@ -972,53 +998,54 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 17,
-    padding: 18,
+    borderRadius: 20,
+    padding: 22,
     alignItems: 'center',
   },
   emptyTitle: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '800',
     textAlign: 'center',
   },
   emptyText: {
     color: colors.muted,
-    fontSize: 11,
-    lineHeight: 17,
+    fontSize: 13,
+    lineHeight: 19,
     textAlign: 'center',
-    marginTop: 5,
+    marginTop: 7,
   },
   errorCard: {
     backgroundColor: '#FEF2F2',
     borderWidth: 1,
     borderColor: '#FECACA',
-    borderRadius: 17,
-    padding: 16,
+    borderRadius: 20,
+    padding: 18,
   },
   errorTitle: {
     color: colors.danger,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '800',
   },
   errorText: {
     color: colors.muted,
-    fontSize: 11,
-    marginTop: 5,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 7,
   },
   retryButton: {
     backgroundColor: colors.danger,
-    borderRadius: 10,
-    paddingVertical: 9,
+    borderRadius: 12,
+    paddingVertical: 12,
     alignItems: 'center',
     marginTop: 10,
   },
   retryText: {
     color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '800',
   },
   bottomSpace: {
-    height: 30,
+    height: 36,
   },
 });
