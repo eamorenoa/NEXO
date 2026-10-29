@@ -31,12 +31,5 @@ CREATE TABLE IF NOT EXISTS map_places (
   longitude NUMERIC(10,7) NOT NULL,
   description TEXT
 );
-INSERT INTO map_places(name,type,latitude,longitude,description) VALUES
-('Punto de ayuda vecinal','help',4.7114,-74.0724,'Apoyo comunitario y orientación'),
-('Servicio comunitario','service',4.7131,-74.0698,'Información y servicios cercanos'),
-('Oportunidad de empleo','job',4.7088,-74.0752,'Oferta de empleo local'),
-('Punto de donaciones','donation',4.7097,-74.0689,'Intercambio y donaciones'),
-('Reporte comunitario','report',4.7140,-74.0738,'Situación reportada por la comunidad')
-ON CONFLICT DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_needs_created_at ON needs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON community_posts(created_at DESC);

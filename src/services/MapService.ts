@@ -1,2 +1,11 @@
 import { api } from './api';
-export const MapService = { places: api.places };
+import { MapPlace, normalizeMapPlaces } from '../models/MapPlace';
+
+async function places(): Promise<MapPlace[]> {
+  const response: unknown = await api.places();
+  return normalizeMapPlaces(response);
+}
+
+export const MapService = {
+  places,
+};

@@ -2288,6 +2288,10 @@ app.get(
                     NULL::text AS author,
                     FALSE AS is_owner
                 FROM map_places
+                WHERE latitude IS NOT NULL
+                  AND longitude IS NOT NULL
+                  AND latitude BETWEEN -90 AND 90
+                  AND longitude BETWEEN -180 AND 180
 
                 UNION ALL
 
@@ -2307,27 +2311,9 @@ app.get(
                 JOIN users u ON u.id = n.user_id
                 WHERE n.latitude IS NOT NULL
                   AND n.longitude IS NOT NULL
+                  AND n.latitude BETWEEN -90 AND 90
+                  AND n.longitude BETWEEN -180 AND 180
                   AND n.status = 'open'
-
-                UNION ALL
-
-                SELECT
-                    'community' AS source,
-                    p.id::text AS id,
-                    COALESCE(p.title, p.body) AS title,
-                    p.post_type AS category,
-                    p.body AS description,
-                    p.latitude,
-                    p.longitude,
-                    p.address,
-                    p.status,
-                    u.name AS author,
-                    (p.user_id = $1) AS is_owner
-                FROM community_posts p
-                JOIN users u ON u.id = p.user_id
-                WHERE p.latitude IS NOT NULL
-                  AND p.longitude IS NOT NULL
-                  AND p.status = 'active'
 
                 ORDER BY source, id
                 `,
